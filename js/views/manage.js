@@ -427,7 +427,8 @@ function renderSettings(body) {
       <p class="hint">Deletes all lists and records from this phone. Download a backup first.</p>
       <button type="button" class="btn btn-danger" id="s-erase">Erase all data</button>
     </section>
-    <p class="about">Work Mate · data stays on this device</p>`;
+    <p class="about">Work Mate <span id="s-version"></span> · data stays on this device</p>
+    <div class="center"><button type="button" class="btn btn-sm btn-ghost" id="s-update">Check for updates</button></div>`;
 
   body.querySelector('#s-week').addEventListener('change', (e) => {
     store.updateSettings({ weekStartsOn: Number(e.target.value) });
@@ -483,6 +484,33 @@ function renderSettings(body) {
       installBtn.hidden = true;
     });
   }
+
+  window.caches
+    ?.keys()
+    .then((keys) => {
+      const v = keys.find((k) => k.startsWith('work-mate-'));
+      if (v) body.querySelector('#s-version').textContent = v.replace('work-mate-', '');
+    })
+    .catch(() => {});
+
+  body.querySelector('#s-update').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const reg = await navigator.serviceWorker?.getRegistration();
+    if (!reg) {
+      toast('Updates apply automatically when the page is reloaded.');
+      return;
+    }
+    btn.disabled = true;
+    window.__reloadOnUpdate = true; // the app reloads itself once the new version is in
+    try {
+      await reg.update();
+      if (reg.installing || reg.waiting) toast('Downloading the new version…');
+      else toast('You have the latest version');
+    } catch {
+      toast('Couldn’t check for updates — no signal?', { kind: 'error' });
+    }
+    btn.disabled = false;
+  });
 
   const persistEl = body.querySelector('#s-persist');
   navigator.storage?.persisted?.().then((p) => {

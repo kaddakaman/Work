@@ -81,9 +81,15 @@ setInterval(tick, 1000);
 window.addEventListener('hashchange', route);
 store.onExternalChange(route);
 
+let shownAt = Date.now();
+let swReg = null;
+
 // Coming back to the app on a new day: refresh so dates default to today.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
+    shownAt = Date.now();
+    // Phones often resume the app instead of restarting it, so look for updates here too.
+    swReg?.update().catch(() => {});
     if (renderedDay !== todayStr() && !document.querySelector('dialog[open]')) route();
     else tick();
   }
@@ -93,10 +99,29 @@ if (!store.storageWorking()) {
   toast('This browser is blocking storage, so nothing will be saved. Turn off private browsing.', { kind: 'error', timeout: 10000 });
 }
 
-// Offline support + "install app" prompt (Android).
+// Offline support. When a new version has been published the service worker
+// fetches it in the background and takes over; then reload onto it straight
+// away if the app was only just opened, otherwise offer a Reload button.
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  navigator.serviceWorker
+    .register('sw.js')
+    .then((reg) => (swReg = reg))
+    .catch(() => {});
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return; // first install: already up to date
+    const justOpened = Date.now() - shownAt < 20000 && !document.querySelector('dialog[open]');
+    if (window.__reloadOnUpdate || justOpened) {
+      reloading = true;
+      location.reload();
+    } else {
+      toast('A new version of Work Mate is ready.', { actionLabel: 'Reload', timeout: 20000, onAction: () => location.reload() });
+    }
+  });
 }
+
+// "Install app" prompt (Android).
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   window.__installPrompt = e;

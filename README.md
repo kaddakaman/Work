@@ -62,6 +62,8 @@ tests/                   node --test unit tests
 
 ## Releasing changes
 
-The service worker serves the cached app first and updates it in the background,
-so a new version shows up the **second** time the app is opened after a deploy.
-If you add or rename files, also add them to `FILES` in `sw.js` and bump `VERSION`.
+**Bump `VERSION` in `sw.js` with every release** (and add any new files to `FILES`).
+When the app is opened or brought back to the front, it sees the new service
+worker, downloads the new files and reloads itself. You can also use
+**Manage → Settings & backup → Check for updates**. The version in use is shown at the
+bottom of that page.
