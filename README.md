@@ -16,8 +16,9 @@ uploaded anywhere.
 
 The app is a set of static files, so any static web host works. The free and easy option is **GitHub Pages**:
 
-1. Merge this branch into `main`.
-2. On GitHub, go to **Settings → Pages**. Under *Build and deployment*, choose **Deploy from a branch**, then **`main`** and **`/ (root)`**, and click **Save**.
+1. On GitHub, go to **Settings → Pages**.
+2. Under *Build and deployment*, choose **Deploy from a branch**. Pick the branch that has this code
+   (e.g. `main`, or `claude/work-management-app-q4c733` until it's merged), choose **`/ (root)`**, and click **Save**.
 3. After a minute or so the app is live at `https://kaddakaman.github.io/Work/`.
 4. Open that link on your phone:
    - **iPhone:** in **Safari**, tap Share, then **Add to Home Screen**.
