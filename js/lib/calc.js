@@ -89,35 +89,42 @@ export function rangeBounds(from, to) {
 /**
  * Stats for hose sessions within [rs, re).
  * - on / off: how many times hoses were turned on / off inside the range
+ * - handover: runs ended by handing over to night shift (not counted as "off")
  * - ms: running time inside the range (sessions are clipped to the range)
  */
 export function vacuumStats(sessions, rs, re, now = Date.now(), gap = VAC_GAP_MS) {
   const hoses = new Map();
   let on = 0;
   let off = 0;
+  let handover = 0;
   let hoseMs = 0;
 
   for (const s of sessions) {
     const end = s.end ?? now;
     const ms = overlap(s.start, end, rs, re);
     const turnedOn = s.start >= rs && s.start < re;
-    const turnedOff = s.end != null && s.end >= rs && s.end < re;
-    if (!ms && !turnedOn && !turnedOff) continue;
+    const endedInRange = s.end != null && s.end >= rs && s.end < re;
+    const handedOver = endedInRange && s.endReason === 'handover';
+    const turnedOff = endedInRange && !handedOver;
+    if (!ms && !turnedOn && !endedInRange) continue;
     const row = hoses.get(s.hoseId) || {
       id: s.hoseId,
       name: s.hoseName,
       on: 0,
       off: 0,
+      handover: 0,
       ms: 0,
       longest: 0,
     };
     row.on += turnedOn ? 1 : 0;
     row.off += turnedOff ? 1 : 0;
+    row.handover += handedOver ? 1 : 0;
     row.ms += ms;
     row.longest = Math.max(row.longest, ms);
     hoses.set(s.hoseId, row);
     on += turnedOn ? 1 : 0;
     off += turnedOff ? 1 : 0;
+    handover += handedOver ? 1 : 0;
     hoseMs += ms;
   }
 
@@ -152,6 +159,7 @@ export function vacuumStats(sessions, rs, re, now = Date.now(), gap = VAC_GAP_MS
   return {
     on,
     off,
+    handover,
     hoseMs,
     vacMs,
     hoses: [...hoses.values()].sort(byMs),

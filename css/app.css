@@ -1442,6 +1442,71 @@ section.stat-grid .stat {
   justify-content: center;
 }
 
+.btn-night {
+  background: #1e2a4a;
+  border-color: #1e2a4a;
+  color: #fff;
+}
+
+#v-handover {
+  width: 100%;
+}
+
+.badge-night {
+  background: #e0e7ff;
+  color: #3730a3;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.badge-night .ico {
+  width: 0.9em;
+  height: 0.9em;
+}
+
+.handover-note {
+  flex-direction: row;
+  align-items: center;
+  gap: 12px;
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.handover-note > .ico {
+  width: 26px;
+  height: 26px;
+  color: #3730a3;
+}
+
+.handover-note div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.handover-note small {
+  color: var(--muted);
+}
+
+@media (prefers-color-scheme: dark) {
+  .btn-night {
+    background: #3b4a7a;
+    border-color: #3b4a7a;
+  }
+  .badge-night {
+    background: #272f5a;
+    color: #c7d2fe;
+  }
+  .handover-note {
+    background: #1b2142;
+    border-color: #2f3a6b;
+  }
+  .handover-note > .ico {
+    color: #a5b4fc;
+  }
+}
+
 .crew-switch {
   display: flex;
   align-items: center;

@@ -218,6 +218,8 @@ function renderHoses(body) {
   const onCount = hoses.filter((h) => openSessionFor(sessions, h.id)).length;
   const runningVacs = order.filter((id) => id && vacuumRunStart(sessions, id, now)).length;
 
+  const handedOver = lastHandover(sessions, hoses);
+
   const tile = (h) => {
     const open = openSessionFor(sessions, h.id);
     const last = open
@@ -235,7 +237,7 @@ function renderHoses(body) {
             open
               ? `<span data-since="${open.start}">${fmtClock(now - open.start)}</span>`
               : last
-                ? `off ${fmtAgo(last.end, now)}`
+                ? `${last.endReason === 'handover' ? 'handed over' : 'off'} ${fmtAgo(last.end, now)}`
                 : 'not used yet'
           }</span>
         </button>
@@ -244,6 +246,12 @@ function renderHoses(body) {
   };
 
   body.innerHTML = `
+    ${
+      handedOver
+        ? `<section class="card handover-note">${icon('moon')}<div><strong>Handed over to night shift at ${tts(handedOver.at)}</strong>
+            <small>${handedOver.count} hose${handedOver.count === 1 ? ' was' : 's were'} running. Anything after this is night shift’s.</small></div></section>`
+        : ''
+    }
     <div class="vac-summary">
       <span><strong>${onCount}</strong> hose${onCount === 1 ? '' : 's'} on</span>
       <span><strong>${runningVacs}</strong> vacuum${runningVacs === 1 ? '' : 's'} running</span>
@@ -273,6 +281,7 @@ function renderHoses(body) {
         </section>`;
       })
       .join('')}
+    <button type="button" class="btn btn-night" id="v-handover" ${onCount ? '' : 'disabled'}>${icon('moon')} Hand over to night shift</button>
     <div class="btn-row wrap">
       <button type="button" class="btn" id="v-add">${icon('plus')} Add hose</button>
       <button type="button" class="btn btn-ghost btn-danger-text" id="v-alloff" ${onCount ? '' : 'disabled'}>${icon('power')} Turn all off</button>
@@ -292,6 +301,7 @@ function renderHoses(body) {
   });
   on(body, '[data-more]', 'click', (_, el) => openHoseSheet(el.dataset.more, rerender));
   body.querySelector('#v-add').addEventListener('click', addHose);
+  body.querySelector('#v-handover').addEventListener('click', () => openHandover(hoses, crew, rerender));
   body.querySelector('#v-alloff').addEventListener('click', async () => {
     const crewName = crew ? ` for ${store.get('crews', crew).name}` : '';
     if (!(await confirmBox(`Turn off all ${onCount} running hose${onCount === 1 ? '' : 's'}${crewName}?`, { ok: 'Turn all off', danger: true }))) return;
@@ -300,6 +310,90 @@ function renderHoses(body) {
     store.mutate((d) => d.vacSessions.forEach((s) => s.end == null && shown.has(s.hoseId) && (s.end = end)));
     toast('All hoses off');
     rerender();
+  });
+}
+
+// ---------------------------------------------------------------- handover to night shift
+
+/** The latest handover today for these hoses, unless something's been turned on since. */
+function lastHandover(sessions, hoses) {
+  const ids = new Set(hoses.map((h) => h.id));
+  const mine = sessions.filter((s) => ids.has(s.hoseId));
+  const handed = mine.filter((s) => s.endReason === 'handover' && tsDate(s.end) === todayStr());
+  if (!handed.length) return null;
+  const at = Math.max(...handed.map((s) => s.end));
+  if (mine.some((s) => s.start > at)) return null;
+  return { at, count: handed.filter((s) => s.end === at).length };
+}
+
+/**
+ * Going home: end the log for everything still running (it isn't switched
+ * off — night shift carries on and organises their own vacuum work).
+ */
+function openHandover(hoses, crew, rerender) {
+  const sessions = store.data().vacSessions;
+  const running = hoses.map((h) => ({ h, s: openSessionFor(sessions, h.id) })).filter((r) => r.s);
+  if (!running.length) return;
+  const n = running.length;
+  const crewName = crew ? store.get('crews', crew)?.name : '';
+  const now = Date.now();
+
+  sheet({
+    title: 'Hand over to night shift',
+    content: `
+      <div class="stack">
+        <p class="hint">Ends your log for the ${n} running hose${n === 1 ? '' : 's'}${crewName ? ` on ${esc(crewName)}` : ''}. They aren’t counted as switched off, and whatever night shift runs after this isn’t in your stats.</p>
+        <ul class="list compact">${running
+          .map(
+            ({ h, s }) => `<li class="list-static"><span><strong>${esc(h.name)}</strong>${s.assetId ? ` <small class="muted">↳ ${esc(store.nameOf('assets', s.assetId, s.assetName))}</small>` : ''}</span><span>${fmtRunLen(now - s.start)}</span></li>`,
+          )
+          .join('')}</ul>
+        <div class="field"><span class="label">Handover time</span><div id="ho-when"></div><small class="hint">Leave as now, or scroll back if you forgot to tap it before leaving.</small></div>
+        <p class="form-error" hidden></p>
+        <div class="btn-row">
+          <button type="button" class="btn" data-close>Cancel</button>
+          <button type="button" class="btn btn-night" id="ho-go">${icon('moon')} Hand over</button>
+        </div>
+      </div>`,
+    onMount: (b, close) => {
+      const when = dateTimeField(b.querySelector('#ho-when'), { ts: now, label: 'Handover time' });
+      const err = b.querySelector('.form-error');
+      b.querySelector('#ho-go').addEventListener('click', () => {
+        let at = when.value;
+        if (!at) return formError(err, 'Pick a date.');
+        // Still on the current minute: use the exact time so nothing started a few seconds ago is cut off.
+        if (Math.abs(Date.now() - at) < 60000) at = Date.now();
+        if (at > Date.now()) return formError(err, 'That time is in the future.');
+        const late = running.find((r) => r.s.start > at);
+        if (late) return formError(err, `${late.h.name} was turned on at ${tts(late.s.start)}, after that time.`);
+        const ids = new Set(running.map((r) => r.s.id));
+        store.mutate((d) =>
+          d.vacSessions.forEach((s) => {
+            if (ids.has(s.id) && s.end == null) {
+              s.end = at;
+              s.endReason = 'handover';
+            }
+          }),
+        );
+        close();
+        toast(`Handed over ${n} hose${n === 1 ? '' : 's'} to night shift`, {
+          actionLabel: 'Undo',
+          timeout: 8000,
+          onAction: () => {
+            store.mutate((d) =>
+              d.vacSessions.forEach((s) => {
+                if (ids.has(s.id) && s.endReason === 'handover' && !openSessionFor(d.vacSessions, s.hoseId)) {
+                  s.end = null;
+                  delete s.endReason;
+                }
+              }),
+            );
+            rerender();
+          },
+        });
+        rerender();
+      });
+    },
   });
 }
 
@@ -389,7 +483,7 @@ function openHoseSheet(hoseId, rerender) {
         (s) => `
         <li class="row-with-action">
           <span class="list-static">
-            <span>${esc(fmtDate(tsDate(s.start)))} · ${tts(s.start)} → ${s.end ? tts(s.end) : 'now'}${isShort(s) ? ' <span class="badge">short</span>' : ''}</span>
+            <span>${esc(fmtDate(tsDate(s.start)))} · ${tts(s.start)} → ${s.end ? tts(s.end) : 'now'}${isShort(s) ? ' <span class="badge">short</span>' : ''}${s.endReason === 'handover' ? ` <span class="badge badge-night">${icon('moon')} handed over</span>` : ''}</span>
             <strong>${fmtRunLen(runLen(s, at))}</strong>
           </span>
           <button type="button" class="icon-btn" data-del-run="${s.id}" aria-label="Delete this run">${icon('trash')}</button>
@@ -560,7 +654,7 @@ function renderStats(body) {
       <div class="stat"><span class="stat-label">Vacuum run time</span><span class="stat-value">${fmtNum(msToHours(st.vacMs), 1)} h</span><span class="stat-sub">${vacRuns} run${vacRuns === 1 ? '' : 's'}</span></div>
       <div class="stat"><span class="stat-label">Hose run time</span><span class="stat-value">${fmtNum(msToHours(st.hoseMs), 1)} h</span><span class="stat-sub">${st.hoses.length} hose${st.hoses.length === 1 ? '' : 's'} combined</span></div>
       <div class="stat"><span class="stat-label">Turned on</span><span class="stat-value">${st.on}</span><span class="stat-sub">time${st.on === 1 ? '' : 's'}</span></div>
-      <div class="stat"><span class="stat-label">Turned off</span><span class="stat-value">${st.off}</span><span class="stat-sub">time${st.off === 1 ? '' : 's'}</span></div>
+      <div class="stat"><span class="stat-label">Turned off</span><span class="stat-value">${st.off}</span><span class="stat-sub">${st.handover ? `+ ${st.handover} handed over` : `time${st.off === 1 ? '' : 's'}`}</span></div>
     </section>
 
     <section class="card" id="vs-chart"></section>
@@ -613,11 +707,13 @@ function renderStats(body) {
                 <strong>${esc(hoseLabel(s.hoseId, s.hoseName))}${s.assetId ? ` <small class="muted">↳ ${esc(store.nameOf('assets', s.assetId, s.assetName))}</small>` : ''}</strong>
                 <small>${esc(fmtDate(tsDate(s.start)))} ${tts(s.start)} → ${s.end ? `${tsDate(s.end) !== tsDate(s.start) ? `${esc(fmtDate(tsDate(s.end)))} ` : ''}${tts(s.end)}` : '<span class="pill pill-on">running</span>'}</small>
               </span>
-              <span class="list-end">${s.end ? `${isShort(s) ? '<span class="badge">short</span> ' : ''}${fmtRunLen(s.end - s.start)}` : `<span data-since="${s.start}">${fmtClock(now - s.start)}</span>`}</span>
+              <span class="list-end">${s.end ? `${isShort(s) ? '<span class="badge">short</span> ' : ''}${s.endReason === 'handover' ? `<span class="badge badge-night" title="Handed over to night shift">${icon('moon')}</span> ` : ''}${fmtRunLen(s.end - s.start)}` : `<span data-since="${s.start}">${fmtClock(now - s.start)}</span>`}</span>
             </button><button type="button" class="icon-btn" data-del-run="${s.id}" aria-label="Delete this run">${icon('trash')}</button></li>`,
               )
               .join('')}</ul>
-            <p class="hint">Tap ${icon('trash')} to delete a run you didn’t mean to start — it comes off the stats. Tap a run to fix its times.</p>`
+            <p class="hint">Tap ${icon('trash')} to delete a run you didn’t mean to start — it comes off the stats. Tap a run to fix its times.${
+              inRange.some((s) => s.endReason === 'handover') ? ` ${icon('moon')} = handed over to night shift.` : ''
+            }</p>`
           : '<p class="hint">Nothing recorded in this period.</p>'
       }
     </section>`;
@@ -782,6 +878,7 @@ function openSessionSheet(id, rerender) {
         <div class="field"><span class="label">Turned on</span><div id="ss-start"></div></div>
         <div class="field">
           <span class="label">Turned off</span>
+          ${s.endReason === 'handover' ? `<small class="hint">${icon('moon')} Handed over to night shift at this time.</small>` : ''}
           <label class="check"><input type="checkbox" id="ss-running" ${s.end ? '' : 'checked'} ${otherOpen ? 'disabled' : ''}><span>Still running</span></label>
           <div id="ss-end" ${s.end ? '' : 'hidden'}></div>
         </div>
@@ -806,7 +903,14 @@ function openSessionSheet(id, rerender) {
         if (end != null && end <= start) return formError(err, 'Turned off must be after turned on.');
         if (end != null && end > Date.now() + 60000) return formError(err, 'Turned off is in the future.');
         const assetId = b.querySelector('#ss-asset').value || null;
-        store.upsert('vacSessions', { id: s.id, start, end, assetId, assetName: store.nameOf('assets', assetId, '') });
+        store.upsert('vacSessions', {
+          id: s.id,
+          start,
+          end,
+          endReason: end == null ? null : s.endReason ?? null,
+          assetId,
+          assetName: store.nameOf('assets', assetId, ''),
+        });
         toast('Run updated');
         close();
         rerender();

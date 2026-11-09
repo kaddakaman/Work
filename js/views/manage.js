@@ -803,18 +803,20 @@ function exportCSV(kind) {
       );
   } else {
     name = 'vacuum-runs';
-    rows = [['Hose', 'Vacuum unit', 'On date', 'On time', 'Off date', 'Off time', 'Hours']];
+    rows = [['Hose', 'Crew', 'Vacuum unit', 'On date', 'On time', 'Off date', 'Off time', 'Hours', 'Ended by']];
     [...d.vacSessions]
       .sort((a, b) => a.start - b.start)
       .forEach((s) =>
         rows.push([
           store.nameOf('hoses', s.hoseId, s.hoseName),
+          hoseCrew(store.get('hoses', s.hoseId))?.name ?? '',
           s.assetId ? store.nameOf('assets', s.assetId, s.assetName) : '',
           tsDate(s.start),
           t(tsTime(s.start)),
           s.end ? tsDate(s.end) : 'still on',
           s.end ? t(tsTime(s.end)) : '',
           (((s.end ?? Date.now()) - s.start) / 3600000).toFixed(2),
+          !s.end ? '' : s.endReason === 'handover' ? 'handed over to night shift' : 'turned off',
         ]),
       );
   }

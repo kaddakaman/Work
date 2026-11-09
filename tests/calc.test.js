@@ -166,6 +166,31 @@ test('vacuum stats clip to the range and count on/off', () => {
   assert.equal(daily[1].ms, 7 * H);
 });
 
+test('handing over to night shift is not counted as turning off', () => {
+  const day = '2026-11-09';
+  const rs = toTs(day);
+  const re = toTs(addDays(day, 1));
+  const sessions = [
+    { hoseId: 'a', hoseName: 'Fwd dry', assetId: 'v1', start: rs + 7 * H, end: rs + 9 * H },
+    { hoseId: 'a', hoseName: 'Fwd dry', assetId: 'v1', start: rs + 10 * H, end: rs + 17 * H, endReason: 'handover' },
+    { hoseId: 'b', hoseName: 'Aft wet', assetId: 'v1', start: rs + 12 * H, end: rs + 17 * H, endReason: 'handover' },
+  ];
+  const st = vacuumStats(sessions, rs, re, re);
+  assert.equal(st.on, 3);
+  assert.equal(st.off, 1);
+  assert.equal(st.handover, 2);
+  // Only the time up to the handover counts
+  assert.equal(st.hoseMs, (2 + 7 + 5) * H);
+  assert.equal(st.vacMs, (2 + 7) * H);
+  assert.deepEqual(
+    st.hoses.map((h) => [h.id, h.off, h.handover]),
+    [
+      ['a', 1, 1],
+      ['b', 0, 1],
+    ],
+  );
+});
+
 test('CSV quoting and number parsing', () => {
   assert.equal(toCSV([['a', 'b,c', 'say "hi"']]), 'a,"b,c","say ""hi"""');
   assert.equal(parseNum('12,345.6'), 12345.6);
