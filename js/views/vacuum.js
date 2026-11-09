@@ -28,7 +28,7 @@ import { openSessionFor, vacuumRunStart, vacuumStats, dailyRunTime } from '../li
 import { createTimePicker } from '../components/timepicker.js';
 import { icon } from '../icons.js';
 import { toast, sheet, confirmBox, periodNav, emptyState, on, formError } from '../ui.js';
-import { openEditor, assetOptions, setHoseTether, crewOf } from './manage.js';
+import { openEditor, openCopyHoses, assetOptions, setHoseTether, crewOf, hoseCrew } from './manage.js';
 
 const stats = { gran: 'day', anchor: null, filter: '' };
 const use12 = () => store.settings().timeFormat === '12';
@@ -88,6 +88,40 @@ function inCrew(assetId, crew = currentCrew()) {
   return !assigned || assigned.id === crew;
 }
 
+/** Is this hose one of the viewed crew's? Hoses with no crew show for every crew. */
+function hoseInCrew(hose, crew = currentCrew()) {
+  if (!crew) return true;
+  const assigned = hoseCrew(hose);
+  return !assigned || assigned.id === crew;
+}
+
+/** A run counts for the crew whose hose it was on. */
+function runInCrew(run, crew = currentCrew()) {
+  if (!crew) return true;
+  const hose = store.get('hoses', run.hoseId);
+  return hose ? hoseInCrew(hose, crew) : inCrew(run.assetId, crew);
+}
+
+/**
+ * Hose names repeat between crews, so when viewing every crew, add the crew
+ * to names that appear more than once: "Forward dry (Ground Crew 2)".
+ */
+function hoseLabeller(crew = currentCrew()) {
+  const seen = new Set();
+  const dup = new Set();
+  for (const h of store.data().hoses) {
+    const k = h.name.trim().toLowerCase();
+    if (seen.has(k)) dup.add(k);
+    seen.add(k);
+  }
+  return (hoseId, fallback = '') => {
+    const name = store.nameOf('hoses', hoseId, fallback);
+    if (crew || !dup.has(name.trim().toLowerCase())) return name;
+    const c = hoseCrew(store.get('hoses', hoseId));
+    return c ? `${name} (${c.name})` : name;
+  };
+}
+
 function crewSwitchHTML() {
   const crews = store.list('crews');
   if (!crews.length) return '';
@@ -133,18 +167,24 @@ function optionsHTML(opts, selected) {
 function renderHoses(body) {
   const allHoses = store.list('hoses');
   const crew = currentCrew();
-  const hoses = allHoses.filter((h) => inCrew(h.assetId, crew));
+  const hoses = allHoses.filter((h) => hoseInCrew(h, crew));
   const sessions = store.data().vacSessions;
   const now = Date.now();
+  const addHose = () => openEditor('hoses', null, () => renderHoses(body), { crewId: crew });
 
   if (!hoses.length && allHoses.length) {
     const crewName = store.get('crews', crew)?.name;
     body.innerHTML = `<section class="card">${emptyState({
       iconName: 'users',
-      title: `No vacuums for ${crewName}`,
-      text: `Edit a vacuum unit in Manage → Assets and set its ground crew to ${crewName}. Hoses tethered to it will then show here.`,
-      action: `<a class="btn btn-primary" href="#/manage/assets">${icon('pencil')} Assign assets</a>`,
+      title: `No hoses for ${crewName} yet`,
+      text: `${crewName} has its own hoses, separate from the other crews’. Copy another crew’s hose setup (it’s usually near identical) or add them one by one. Set the ground crew on ${crewName}’s vacuum units in Manage → Assets too.`,
+      action: `<div class="btn-row wrap center-row">
+          <button type="button" class="btn btn-primary" id="v-copy">${icon('copy')} Copy hoses</button>
+          <button type="button" class="btn" id="v-first">${icon('plus')} Add hose</button>
+        </div>`,
     })}</section>`;
+    body.querySelector('#v-copy').addEventListener('click', () => openCopyHoses(() => renderHoses(body), { to: crew }));
+    body.querySelector('#v-first').addEventListener('click', addHose);
     return;
   }
 
@@ -155,7 +195,7 @@ function renderHoses(body) {
       text: 'Add each vacuum hose (e.g. “Forward dry”) and which vacuum unit it runs from. Then tap a hose to mark it on or off.',
       action: `<button type="button" class="btn btn-primary" id="v-first">${icon('plus')} Add hose</button>`,
     })}</section>`;
-    body.querySelector('#v-first').addEventListener('click', () => openEditor('hoses', null, () => renderHoses(body)));
+    body.querySelector('#v-first').addEventListener('click', addHose);
     return;
   }
 
@@ -251,7 +291,7 @@ function renderHoses(body) {
     if (group && (top < 70 || top > window.innerHeight * 0.5)) group.scrollIntoView({ behavior: 'smooth', block: 'start' });
   });
   on(body, '[data-more]', 'click', (_, el) => openHoseSheet(el.dataset.more, rerender));
-  body.querySelector('#v-add').addEventListener('click', () => openEditor('hoses', null, rerender));
+  body.querySelector('#v-add').addEventListener('click', addHose);
   body.querySelector('#v-alloff').addEventListener('click', async () => {
     const crewName = crew ? ` for ${store.get('crews', crew).name}` : '';
     if (!(await confirmBox(`Turn off all ${onCount} running hose${onCount === 1 ? '' : 's'}${crewName}?`, { ok: 'Turn all off', danger: true }))) return;
@@ -365,7 +405,7 @@ function openHoseSheet(hoseId, rerender) {
       <div class="stack">
         <p class="hose-status ${open ? 'on' : 'off'}">${icon('power')} ${open ? `ON since ${tts(open.start)} · <span data-since="${open.start}">${fmtClock(now - open.start)}</span>` : 'OFF'}</p>
         <label class="field"><span>Runs from (vacuum unit)</span>
-          <select id="hs-asset">${optionsHTML(assetOptions(), hose.assetId)}</select>
+          <select id="hs-asset">${optionsHTML(assetOptions({ crewId: hoseCrew(hose)?.id, include: hose.assetId }), hose.assetId)}</select>
         </label>
         <details class="field">
           <summary>${open ? 'Fix the time it was turned on' : 'It’s already on — start it from an earlier time'}</summary>
@@ -478,7 +518,8 @@ function renderStats(body) {
   const rs = toTs(from);
   const re = toTs(to);
   const crew = currentCrew();
-  const all = store.data().vacSessions.filter((s) => inCrew(s.assetId, crew));
+  const all = store.data().vacSessions.filter((s) => runInCrew(s, crew));
+  const hoseLabel = hoseLabeller(crew);
   const [fKind, fId] = stats.filter.split(':');
   const sessions = fKind === 'hose' ? all.filter((s) => s.hoseId === fId) : fKind === 'asset' ? all.filter((s) => s.assetId === fId) : all;
   const st = vacuumStats(sessions, rs, re, now);
@@ -486,10 +527,10 @@ function renderStats(body) {
   const vacRuns = st.vacuums.reduce((n, v) => n + v.runs, 0);
 
   // Filter choices: every hose / vacuum seen in the data or the lists.
-  const hoseIds = new Map(store.list('hoses').filter((h) => inCrew(h.assetId, crew)).map((h) => [h.id, h.name]));
+  const hoseIds = new Map(store.list('hoses').filter((h) => hoseInCrew(h, crew)).map((h) => [h.id, hoseLabel(h.id)]));
   const assetIds = new Map(store.list('assets').filter((a) => a.isVacuum && inCrew(a.id, crew)).map((a) => [a.id, a.name]));
   for (const s of all) {
-    if (!hoseIds.has(s.hoseId)) hoseIds.set(s.hoseId, store.nameOf('hoses', s.hoseId, s.hoseName));
+    if (!hoseIds.has(s.hoseId)) hoseIds.set(s.hoseId, hoseLabel(s.hoseId, s.hoseName));
     if (s.assetId && !assetIds.has(s.assetId)) assetIds.set(s.assetId, store.nameOf('assets', s.assetId, s.assetName));
   }
   const filterOpts = [
@@ -545,7 +586,7 @@ function renderStats(body) {
           ? `<div class="table-wrap"><table class="table">
               <thead><tr><th>Hose</th><th class="num">On</th><th class="num">Off</th><th class="num">Hours</th><th class="num">Longest</th></tr></thead>
               <tbody>${st.hoses
-                .map((h) => `<tr><td>${esc(store.nameOf('hoses', h.id, h.name))}</td><td class="num">${h.on}</td><td class="num">${h.off}</td><td class="num">${fmtNum(msToHours(h.ms), 1)}</td><td class="num">${fmtDur(h.longest)}</td></tr>`)
+                .map((h) => `<tr><td>${esc(hoseLabel(h.id, h.name))}</td><td class="num">${h.on}</td><td class="num">${h.off}</td><td class="num">${fmtNum(msToHours(h.ms), 1)}</td><td class="num">${fmtDur(h.longest)}</td></tr>`)
                 .join('')}</tbody></table></div>`
           : '<p class="hint">No hose activity in this period.</p>'
       }
@@ -569,7 +610,7 @@ function renderStats(body) {
                 (s) => `
             <li class="row-with-action"><button type="button" class="list-row" data-session="${s.id}">
               <span class="list-main">
-                <strong>${esc(store.nameOf('hoses', s.hoseId, s.hoseName))}${s.assetId ? ` <small class="muted">↳ ${esc(store.nameOf('assets', s.assetId, s.assetName))}</small>` : ''}</strong>
+                <strong>${esc(hoseLabel(s.hoseId, s.hoseName))}${s.assetId ? ` <small class="muted">↳ ${esc(store.nameOf('assets', s.assetId, s.assetName))}</small>` : ''}</strong>
                 <small>${esc(fmtDate(tsDate(s.start)))} ${tts(s.start)} → ${s.end ? `${tsDate(s.end) !== tsDate(s.start) ? `${esc(fmtDate(tsDate(s.end)))} ` : ''}${tts(s.end)}` : '<span class="pill pill-on">running</span>'}</small>
               </span>
               <span class="list-end">${s.end ? `${isShort(s) ? '<span class="badge">short</span> ' : ''}${fmtRunLen(s.end - s.start)}` : `<span data-since="${s.start}">${fmtClock(now - s.start)}</span>`}</span>
@@ -611,7 +652,7 @@ function renderStats(body) {
   });
 
   const chart = body.querySelector('#vs-chart');
-  if (stats.gran === 'day') renderTimeline(chart, inRange, rs, re, now);
+  if (stats.gran === 'day') renderTimeline(chart, inRange, rs, re, now, hoseLabel);
   else renderDailyBars(chart, sessions, datesBetween(from, to), now);
 }
 
@@ -680,11 +721,11 @@ function renderDailyBars(chart, sessions, dates, now) {
   wireTooltip(chart);
 }
 
-function renderTimeline(chart, sessions, rs, re, now) {
+function renderTimeline(chart, sessions, rs, re, now, hoseLabel) {
   const span = re - rs;
   const lanes = new Map();
   for (const s of [...sessions].sort((a, b) => a.start - b.start)) {
-    if (!lanes.has(s.hoseId)) lanes.set(s.hoseId, { name: store.nameOf('hoses', s.hoseId, s.hoseName), segs: [] });
+    if (!lanes.has(s.hoseId)) lanes.set(s.hoseId, { name: hoseLabel(s.hoseId, s.hoseName), segs: [] });
     lanes.get(s.hoseId).segs.push(s);
   }
   const nowPct = now >= rs && now < re ? ((now - rs) / span) * 100 : null;

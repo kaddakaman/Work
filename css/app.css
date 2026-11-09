@@ -1412,6 +1412,36 @@ section.stat-grid .stat {
 
 /* ------------------------------------------------------------------ vacuum */
 
+.row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.map-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.list-group-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.list-group-title .ico {
+  width: 1em;
+  height: 1em;
+}
+
+.center-row {
+  justify-content: center;
+}
+
 .crew-switch {
   display: flex;
   align-items: center;

@@ -1,5 +1,5 @@
 // Manage page: the editable lists that fill every dropdown in the app
-// (assets, hoses, allowances, locations, job types) plus settings & backup.
+// (assets, hoses, ground crews, allowances, locations, job types) plus settings & backup.
 
 import * as store from '../store.js';
 import {
@@ -14,25 +14,14 @@ import {
   toCSV,
   downloadFile,
   fmtDayName,
+  uid,
+  byName,
 } from '../util.js';
 import { shiftMinutes, shiftAllowanceTotal, jobMinutes, openSessionFor } from '../lib/calc.js';
 import { icon } from '../icons.js';
 import { sheet, confirmBox, toast, emptyState, on, formError } from '../ui.js';
 
 // ---------------------------------------------------------------- list definitions
-
-export const assetOptions = () => {
-  const all = store.list('assets');
-  const vac = all.filter((a) => a.isVacuum);
-  const other = all.filter((a) => !a.isVacuum);
-  return [
-    { value: '', label: '— Not tethered —' },
-    ...(vac.length ? [{ group: 'Vacuum units', options: vac.map((a) => ({ value: a.id, label: a.name })) }] : []),
-    ...(other.length
-      ? [{ group: vac.length ? 'Other assets' : 'Assets', options: other.map((a) => ({ value: a.id, label: a.name })) }]
-      : []),
-  ];
-};
 
 export const crewOptions = () => [
   { value: '', label: 'Not set (shows for every crew)' },
@@ -43,6 +32,43 @@ export const crewOptions = () => [
 export function crewOf(asset) {
   const crew = asset?.crewId ? store.get('crews', asset.crewId) : null;
   return crew && !crew.archived ? crew : null;
+}
+
+/** A hose's crew: its own setting, otherwise the crew of the vacuum it runs from. */
+export function hoseCrew(hose) {
+  if (!hose) return null;
+  const own = hose.crewId ? store.get('crews', hose.crewId) : null;
+  if (own && !own.archived) return own;
+  return crewOf(store.get('assets', hose.assetId));
+}
+
+/**
+ * Choices for "runs from": vacuum units grouped by crew, then other assets.
+ * With crewId, only that crew's (and crew-less) assets are listed, plus `include`.
+ */
+export function assetOptions({ crewId = '', include = '' } = {}) {
+  const all = store.list('assets');
+  const fits = (a) => !crewId || !crewOf(a) || crewOf(a).id === crewId || a.id === include;
+  const opt = (a) => ({ value: a.id, label: a.name });
+  const vac = all.filter((a) => a.isVacuum && fits(a));
+  const groups = [];
+  for (const c of store.list('crews')) {
+    const list = vac.filter((a) => crewOf(a)?.id === c.id);
+    if (list.length) groups.push({ group: `${c.name} vacuums`, options: list.map(opt) });
+  }
+  const noCrew = vac.filter((a) => !crewOf(a));
+  if (noCrew.length) groups.push({ group: groups.length ? 'Vacuum units (no crew)' : 'Vacuum units', options: noCrew.map(opt) });
+  const other = all.filter((a) => !a.isVacuum && fits(a));
+  if (other.length) groups.push({ group: vac.length ? 'Other assets' : 'Assets', options: other.map(opt) });
+  return [{ value: '', label: '— Not tethered —' }, ...groups];
+}
+
+/** Group list rows under their crew (crew order, then "No crew"). */
+function byCrewGroup(crew) {
+  const crews = store.list('crews');
+  return crew
+    ? { key: crew.id, label: crew.name, order: crews.findIndex((c) => c.id === crew.id) }
+    : { key: '', label: 'No crew (shows for every crew)', order: 999 };
 }
 
 export const ENTITIES = {
@@ -79,10 +105,10 @@ export const ENTITIES = {
         a.ref,
         [a.hasOdometer && 'Odo', a.hasEngine && 'Engine', a.hasPto && 'PTO'].filter(Boolean).join(' · ') || 'No meters',
         a.isVacuum && 'Vacuum unit',
-        crewOf(a)?.name,
       ]
         .filter(Boolean)
         .join('  •  '),
+    groupBy: (a) => byCrewGroup(crewOf(a)),
     usage: (id) => {
       const d = store.data();
       return [
@@ -96,19 +122,48 @@ export const ENTITIES = {
     title: 'Hoses',
     one: 'hose',
     icon: 'wind',
-    intro: 'Vacuum hoses and the areas they run to. Tether each one to the vacuum unit it runs from.',
+    intro: 'Vacuum hoses and the areas they run to. Each crew has its own hoses, so the same names can be used on both. Tether each hose to the vacuum unit it runs from.',
     fields: [
       { key: 'name', label: 'Hose name', type: 'text', required: true, placeholder: 'e.g. Forward dry' },
       { key: 'area', label: 'Area / description (optional)', type: 'text' },
       {
+        key: 'crewId',
+        label: 'Ground crew',
+        type: 'select',
+        options: crewOptions,
+        note: 'A separate hose from any other crew’s, even with the same name.',
+      },
+      {
         key: 'assetId',
         label: 'Runs from (vacuum unit)',
         type: 'select',
-        options: assetOptions,
+        options: () => assetOptions(),
         note: 'Mark an asset as a vacuum unit in Assets to list it first.',
       },
     ],
     sub: (h) => [h.area, h.assetId ? `↳ ${store.nameOf('assets', h.assetId, 'deleted asset')}` : 'Not tethered'].filter(Boolean).join('  •  '),
+    groupBy: (h) => byCrewGroup(hoseCrew(h)),
+    // Older hoses took their crew from their vacuum: show that in the editor.
+    prepare: (item) => {
+      if (!item.crewId) item.crewId = hoseCrew(item)?.id || '';
+    },
+    // Picking a vacuum that belongs to a crew sets the hose's crew to match.
+    wire: (form) => {
+      form.elements.assetId.addEventListener('change', () => {
+        const crew = crewOf(store.get('assets', form.elements.assetId.value));
+        if (crew) form.elements.crewId.value = crew.id;
+      });
+    },
+    validate: (v) => {
+      const vacCrew = crewOf(store.get('assets', v.assetId));
+      if (vacCrew && v.crewId && vacCrew.id !== v.crewId) {
+        return `${store.nameOf('assets', v.assetId)} belongs to ${vacCrew.name}. Pick one of ${store.nameOf('crews', v.crewId)}’s vacuums, or change the crew.`;
+      }
+      return '';
+    },
+    // Names only need to be unique within a crew.
+    clashScope: (other, v) => (hoseCrew(other)?.id || '') === (v.crewId || crewOf(store.get('assets', v.assetId))?.id || ''),
+    scopeName: (v) => store.nameOf('crews', v.crewId || crewOf(store.get('assets', v.assetId))?.id, ''),
     usage: (id) => [[store.data().vacSessions.filter((s) => s.hoseId === id).length, 'recorded run']],
     beforeSave: (item, prev) => {
       // Re-tethering a hose that's on corrects its current run too.
@@ -128,13 +183,18 @@ export const ENTITIES = {
     title: 'Ground crews',
     one: 'crew',
     icon: 'users',
-    intro: 'One crew per vessel. Assign assets to a crew (in Assets) and the Vacuum page will only show your crew’s vacuums.',
+    intro: 'One crew per vessel. Give assets and hoses a crew and the Vacuum page will only show your crew’s.',
     fields: [{ key: 'name', label: 'Crew name', type: 'text', required: true, placeholder: 'e.g. Ground Crew 1' }],
     sub: (c) => {
-      const n = store.data().assets.filter((a) => a.crewId === c.id && !a.archived).length;
-      return `${n} asset${n === 1 ? '' : 's'}`;
+      const d = store.data();
+      const a = d.assets.filter((x) => x.crewId === c.id && !x.archived).length;
+      const h = d.hoses.filter((x) => !x.archived && hoseCrew(x)?.id === c.id).length;
+      return `${a} asset${a === 1 ? '' : 's'} · ${h} hose${h === 1 ? '' : 's'}`;
     },
-    usage: (id) => [[store.data().assets.filter((a) => a.crewId === id).length, 'asset']],
+    usage: (id) => [
+      [store.data().assets.filter((a) => a.crewId === id).length, 'asset'],
+      [store.data().hoses.filter((h) => h.crewId === id).length, 'hose'],
+    ],
     beforeRemove: (item) => {
       if (store.settings().crewId === item.id) store.updateSettings({ crewId: '' });
     },
@@ -194,6 +254,7 @@ export function setHoseTether(hoseId, assetId) {
   const prev = store.get('hoses', hoseId);
   if (!prev) return;
   const next = { ...prev, assetId: assetId || null };
+  if (!next.crewId) next.crewId = crewOf(store.get('assets', assetId))?.id || '';
   ENTITIES.hoses.beforeSave(next, prev);
   store.upsert('hoses', next);
 }
@@ -258,11 +319,13 @@ function readFields(form, fields, out = {}) {
 
 /**
  * Open the add/edit sheet for a list item.
- * kind: 'assets' | 'hoses' | 'allowances' | 'locations' | 'jobTypes'
+ * kind: 'assets' | 'hoses' | 'crews' | 'allowances' | 'locations' | 'jobTypes'
+ * defaults: starting values for a new item (e.g. { crewId }).
  */
-export function openEditor(kind, existing = null, onSaved = () => {}) {
+export function openEditor(kind, existing = null, onSaved = () => {}, defaults = {}) {
   const def = ENTITIES[kind];
-  const item = existing ? { ...existing } : {};
+  const item = existing ? { ...existing } : { ...defaults };
+  def.prepare?.(item);
   const isNew = !existing;
 
   const usage = existing ? def.usage(existing.id).filter(([n]) => n > 0) : [];
@@ -294,15 +357,26 @@ export function openEditor(kind, existing = null, onSaved = () => {}) {
       const form = body.querySelector('form');
       const err = body.querySelector('.form-error');
       if (isNew) setTimeout(() => form.elements.name?.focus(), 50);
+      def.wire?.(form);
 
       form.addEventListener('submit', (e) => {
         e.preventDefault();
         const values = readFields(form, def.fields);
         if (!values.name) return formError(err, 'Please enter a name.');
+        const problem = def.validate?.(values);
+        if (problem) return formError(err, problem);
         const clash = store
           .data()
-          [kind].find((x) => x.id !== existing?.id && x.name.trim().toLowerCase() === values.name.toLowerCase());
-        if (clash) return formError(err, `There's already ${def.one === 'asset' ? 'an' : 'a'} ${def.one} called “${clash.name}”.`);
+          [kind].find(
+            (x) =>
+              x.id !== existing?.id &&
+              x.name.trim().toLowerCase() === values.name.toLowerCase() &&
+              (!def.clashScope || def.clashScope(x, values)),
+          );
+        if (clash) {
+          const scope = def.scopeName?.(values);
+          return formError(err, `There's already ${def.one === 'asset' ? 'an' : 'a'} ${def.one} called “${clash.name}”${scope ? ` in ${scope}` : ''}.`);
+        }
         const next = { ...item, ...values };
         def.beforeSave?.(next, existing);
         const saved = store.upsert(kind, next);
@@ -367,6 +441,22 @@ function renderList(body, kind) {
       ${icon('pencil', 'muted')}
     </button></li>`;
 
+  const listHTML = (items) => {
+    const groups = new Map();
+    for (const x of items) {
+      const g = def.groupBy ? def.groupBy(x) : { key: '', label: '', order: 0 };
+      if (!groups.has(g.key)) groups.set(g.key, { ...g, items: [] });
+      groups.get(g.key).items.push(x);
+    }
+    // No crews in use: just a plain list.
+    if (groups.size === 1 && groups.has('')) return `<ul class="list">${items.map(row).join('')}</ul>`;
+    return [...groups.values()]
+      .sort((a, b) => a.order - b.order)
+      .map((g) => `<h3 class="sub-title list-group-title">${icon('users')} ${esc(g.label)} <span class="muted">(${g.items.length})</span></h3><ul class="list">${g.items.map(row).join('')}</ul>`)
+      .join('');
+  };
+  const canCopy = kind === 'hoses' && store.list('crews').length >= 2 && active.length > 0;
+
   body.innerHTML = `
     <section class="card">
       <div class="card-head">
@@ -374,9 +464,10 @@ function renderList(body, kind) {
         <button type="button" class="btn btn-primary btn-sm" data-add>${icon('plus')} Add</button>
       </div>
       <p class="hint">${esc(def.intro)}</p>
+      ${canCopy ? `<button type="button" class="btn btn-sm" id="copy-hoses">${icon('copy')} Copy hoses to another crew</button>` : ''}
       ${
         active.length
-          ? `<ul class="list">${active.map(row).join('')}</ul>`
+          ? listHTML(active)
           : emptyState({ iconName: def.icon, title: `No ${def.title.toLowerCase()} yet`, text: `Tap Add to create your first ${def.one}.` })
       }
       ${
@@ -389,6 +480,97 @@ function renderList(body, kind) {
   const rerender = () => renderList(body, kind);
   body.querySelector('[data-add]').addEventListener('click', () => openEditor(kind, null, rerender));
   on(body, '.list-row', 'click', (_, el) => openEditor(kind, store.get(kind, el.dataset.id), rerender));
+  body.querySelector('#copy-hoses')?.addEventListener('click', () => openCopyHoses(rerender));
+}
+
+// ---------------------------------------------------------------- copy hoses between crews
+
+/**
+ * Both vessels have near-identical hose setups: copy one crew's hoses to
+ * another as brand-new, separate hoses (no runs are shared).
+ */
+export function openCopyHoses(onDone = () => {}, { to: wantTo = '' } = {}) {
+  const crews = store.list('crews');
+  const hosesOf = (crewId) => store.list('hoses').filter((h) => (hoseCrew(h)?.id || '') === crewId);
+  const sources = [...crews, { id: '', name: 'No crew set' }].filter((c) => hosesOf(c.id).length);
+  let to = crews.some((c) => c.id === wantTo) ? wantTo : '';
+  let from = sources.find((c) => c.id !== to)?.id ?? '';
+  if (!to) to = crews.find((c) => c.id !== from)?.id ?? '';
+  const nameOf = (id) => store.nameOf('crews', id, 'No crew set');
+  const key = (h) => h.name.trim().toLowerCase();
+
+  sheet({
+    title: 'Copy hoses to another crew',
+    content: '<div class="stack" id="cp"></div>',
+    onMount: (b, close) => {
+      const box = b.querySelector('#cp');
+      const paint = () => {
+        const src = hosesOf(from);
+        const have = new Set(hosesOf(to).map(key));
+        const toCopy = src.filter((h) => !have.has(key(h)));
+        const srcVacs = [...new Set(toCopy.map((h) => h.assetId).filter((id) => store.get('assets', id)))]
+          .map((id) => store.get('assets', id))
+          .sort(byName);
+        const targetVacs = store.list('assets').filter((a) => a.isVacuum && crewOf(a)?.id === to);
+        const n = toCopy.length;
+        box.innerHTML = `
+          <div class="row2">
+            <label class="field"><span>From</span><select id="cp-from">${sources
+              .map((c) => `<option value="${c.id}" ${c.id === from ? 'selected' : ''}>${esc(c.name)}</option>`)
+              .join('')}</select></label>
+            <label class="field"><span>To</span><select id="cp-to">${crews
+              .filter((c) => c.id !== from)
+              .map((c) => `<option value="${c.id}" ${c.id === to ? 'selected' : ''}>${esc(c.name)}</option>`)
+              .join('')}</select></label>
+          </div>
+          <p class="hint">Makes a new, separate hose in ${esc(nameOf(to))} for each one (same name and area). Runs and stats stay separate.</p>
+          ${
+            srcVacs.length
+              ? `<fieldset class="field"><legend>Tether the copies to</legend>
+                  ${srcVacs
+                    .map(
+                      (a, i) => `<label class="map-row"><span>${esc(a.name)} hoses →</span>
+                        <select data-map="${a.id}"><option value="">Not tethered</option>${targetVacs
+                          .map((t, j) => `<option value="${t.id}" ${j === i ? 'selected' : ''}>${esc(t.name)}</option>`)
+                          .join('')}</select></label>`,
+                    )
+                    .join('')}
+                  ${targetVacs.length ? '' : `<small class="hint">No vacuum units are set to ${esc(nameOf(to))} yet. Set their crew in Assets to choose them here, or tether the hoses later via ⋯.</small>`}
+                </fieldset>`
+              : ''
+          }
+          <p class="kv"><span>Hoses to copy</span><strong>${n}</strong></p>
+          ${src.length - n ? `<p class="hint">${src.length - n} already exist${src.length - n === 1 ? 's' : ''} in ${esc(nameOf(to))} and will be skipped.</p>` : ''}
+          <div class="btn-row">
+            <button type="button" class="btn" data-close>Cancel</button>
+            <button type="button" class="btn btn-primary" id="cp-go" ${n && to ? '' : 'disabled'}>${icon('copy')} Copy ${n} hose${n === 1 ? '' : 's'}</button>
+          </div>`;
+
+        box.querySelector('#cp-from').addEventListener('change', (e) => {
+          from = e.target.value;
+          if (to === from) to = crews.find((c) => c.id !== from)?.id ?? '';
+          paint();
+        });
+        box.querySelector('#cp-to').addEventListener('change', (e) => {
+          to = e.target.value;
+          paint();
+        });
+        box.querySelector('#cp-go').addEventListener('click', () => {
+          const map = {};
+          box.querySelectorAll('[data-map]').forEach((s) => (map[s.dataset.map] = s.value || null));
+          store.mutate((d) => {
+            for (const h of toCopy) {
+              d.hoses.push({ id: uid(), name: h.name, area: h.area || '', crewId: to, assetId: map[h.assetId] ?? null, createdAt: Date.now() });
+            }
+          });
+          close();
+          toast(`Copied ${n} hose${n === 1 ? '' : 's'} to ${nameOf(to)}`);
+          onDone();
+        });
+      };
+      paint();
+    },
+  });
 }
 
 // ---------------------------------------------------------------- settings

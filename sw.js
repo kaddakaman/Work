@@ -2,7 +2,7 @@
 // Files are served from the cache straight away and refreshed in the
 // background. Bump VERSION on every release: the app spots the new service
 // worker, downloads the new files and reloads itself.
-const VERSION = 'v5';
+const VERSION = 'v6';
 const CACHE = `work-mate-${VERSION}`;
 const FILES = [
   './',
