@@ -133,9 +133,9 @@ export const ENTITIES = {
     title: 'Locations',
     one: 'location',
     icon: 'pin',
-    intro: 'Sentry / tank cleaning locations. Use code names — never the real vessel or tank names.',
+    intro: 'Tanks, vessels or sites you log sentry and tank cleaning jobs at.',
     fields: [
-      { key: 'name', label: 'Code name', type: 'text', required: true, placeholder: 'e.g. Site A, Tank 3' },
+      { key: 'name', label: 'Location name', type: 'text', required: true, placeholder: 'e.g. Tank 3' },
       { key: 'notes', label: 'Notes (optional)', type: 'textarea' },
     ],
     sub: (l) => l.notes || '',

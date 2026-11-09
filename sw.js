@@ -2,7 +2,7 @@
 // Files are served from the cache straight away and refreshed in the
 // background, so a new version shows up the next time the app is opened.
 // Bump VERSION whenever the file list changes.
-const VERSION = 'v2';
+const VERSION = 'v3';
 const CACHE = `work-mate-${VERSION}`;
 const FILES = [
   './',

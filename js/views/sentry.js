@@ -1,5 +1,5 @@
 // Sentry log: timesheet-style log of sentry / tank cleaning (or any job type)
-// at code-named locations, with a "start now" timer for jobs in progress.
+// at your own list of locations, with a "start now" timer for jobs in progress.
 
 import * as store from '../store.js';
 import {
@@ -147,7 +147,6 @@ function renderForm(root) {
           </select>
           <button type="button" class="icon-btn outline" id="s-loc-new" aria-label="Add a location">${icon('plus')}</button>
         </div>
-        <small class="hint">Use code names only. Everything stays on this phone.</small>
       </div>
       <div class="field">
         <label for="s-date">Date</label>
