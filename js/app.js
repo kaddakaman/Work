@@ -6,17 +6,18 @@ import { toast } from './ui.js';
 import * as assets from './views/assets.js';
 import * as hours from './views/hours.js';
 import * as vacuum from './views/vacuum.js';
-import * as sentry from './views/sentry.js';
+import * as jobs from './views/jobs.js';
 import * as manage from './views/manage.js';
 
 const ROUTES = {
   assets: { title: 'Asset readings', tab: 'Assets', icon: 'gauge', view: assets },
   hours: { title: 'Hours worked', tab: 'Hours', icon: 'clock', view: hours },
   vacuum: { title: 'Vacuum', tab: 'Vacuum', icon: 'wind', view: vacuum },
-  sentry: { title: 'Sentry log', tab: 'Sentry', icon: 'shield', view: sentry },
+  jobs: { title: 'Jobs', tab: 'Jobs', icon: 'clipboard', view: jobs },
   manage: { title: 'Manage', tab: 'Manage', icon: 'sliders', view: manage },
 };
 const LAST_TAB = 'workmate:lastTab';
+const RENAMED = { sentry: 'jobs' }; // old links / saved tab → new tab
 
 const main = document.getElementById('view');
 const title = document.getElementById('page-title');
@@ -36,6 +37,10 @@ function parseHash() {
 
 function route() {
   const { name, rest } = parseHash();
+  if (RENAMED[name]) {
+    location.replace(`#/${[RENAMED[name], ...rest].join('/')}`);
+    return;
+  }
   if (!ROUTES[name]) {
     let last = 'assets';
     try {
@@ -43,6 +48,7 @@ function route() {
     } catch {
       /* ignore */
     }
+    last = RENAMED[last] || last;
     location.replace(`#/${ROUTES[last] ? last : 'assets'}`);
     return;
   }

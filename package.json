@@ -2,7 +2,7 @@
   "name": "work-mate",
   "version": "1.0.0",
   "private": true,
-  "description": "Offline phone app for asset readings, hours worked, vacuum hoses and sentry logs.",
+  "description": "Offline phone app for asset readings, hours worked, vacuum hoses and jobs.",
   "type": "module",
   "scripts": {
     "start": "python3 -m http.server 8080",

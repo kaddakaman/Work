@@ -1,7 +1,7 @@
 {
   "name": "Work Mate",
   "short_name": "Work Mate",
-  "description": "Asset readings, hours worked, vacuum hoses and sentry log — offline on your phone.",
+  "description": "Asset readings, hours worked, vacuum hoses and jobs — offline on your phone.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -17,6 +17,6 @@
   "shortcuts": [
     { "name": "Hours worked", "url": "./#/hours" },
     { "name": "Vacuum hoses", "url": "./#/vacuum" },
-    { "name": "Sentry log", "url": "./#/sentry" }
+    { "name": "Jobs", "url": "./#/jobs" }
   ]
 }

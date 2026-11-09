@@ -1,5 +1,6 @@
-// Sentry log: timesheet-style log of sentry / tank cleaning (or any job type)
-// at your own list of locations, with a "start now" timer for jobs in progress.
+// Jobs: timesheet-style log of sentry, tank cleaning or any job type, with an
+// optional tank and location, and a "start now" timer for jobs in progress.
+// (Entries are stored in the "sentry" list, from when this tab was the Sentry log.)
 
 import * as store from '../store.js';
 import {
@@ -26,7 +27,7 @@ import { jobMinutes, groupMinutes } from '../lib/calc.js';
 import { createTimePicker } from '../components/timepicker.js';
 import { icon } from '../icons.js';
 import { toast, confirmBox, periodNav, on, formError } from '../ui.js';
-import { openEditor } from './manage.js';
+import { openEditor, openMoveSheet } from './manage.js';
 
 let draft = null;
 let weekAnchor = null;
@@ -34,7 +35,15 @@ let weekAnchor = null;
 const use12 = () => store.settings().timeFormat === '12';
 const t = (x) => fmtTime(x, use12());
 const jobName = (e) => store.nameOf('jobTypes', e.jobTypeId, e.jobTypeName || 'Job');
-const locName = (e) => (e.locationId ? store.nameOf('locations', e.locationId, e.locationName) : '');
+
+// The two optional "where" dropdowns on a job.
+const PLACES = [
+  { key: 'tank', coll: 'tanks', label: 'Tank', none: '— No tank —', empty: 'No tanks yet — tap +' },
+  { key: 'location', coll: 'locations', label: 'Location', none: '— No location —', empty: 'No locations yet — tap +' },
+];
+const placeName = (e, p) => (e[`${p.key}Id`] ? store.nameOf(p.coll, e[`${p.key}Id`], e[`${p.key}Name`]) : '');
+/** "Tank 3P · Main deck" (whichever are set) */
+const where = (e) => PLACES.map((p) => placeName(e, p)).filter(Boolean).join(' · ');
 
 function freshDraft() {
   const last = [...store.data().sentry].sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).at(-1);
@@ -44,6 +53,7 @@ function freshDraft() {
     day: todayStr(),
     date: todayStr(),
     jobTypeId: (last && store.get('jobTypes', last.jobTypeId) ? last.jobTypeId : types[0]?.id) || '',
+    tankId: last && store.get('tanks', last.tankId) ? last.tankId : '',
     locationId: last && store.get('locations', last.locationId) ? last.locationId : '',
     start: last?.start ?? '06:00',
     finish: last?.finish || '18:00',
@@ -80,7 +90,7 @@ function renderActive(root) {
       return `
       <section class="card active-job">
         <div class="active-head"><span class="pill pill-on">In progress</span><span class="active-clock" data-since="${since}">${fmtClock(now - since)}</span></div>
-        <p class="active-title"><strong>${esc(jobName(e))}</strong>${locName(e) ? ` · ${esc(locName(e))}` : ''}</p>
+        <p class="active-title"><strong>${esc(jobName(e))}</strong>${where(e) ? ` · ${esc(where(e))}` : ''}</p>
         <p class="hint">Started ${t(e.start)}${e.date !== todayStr() ? ` on ${esc(fmtDate(e.date))}` : ''}</p>
         <div class="btn-row">
           <button type="button" class="btn" data-edit="${e.id}">${icon('pencil')} Edit</button>
@@ -114,18 +124,34 @@ function renderForm(root) {
   const card = root.querySelector('#s-card');
   const st = store.settings();
   const types = store.list('jobTypes');
-  const locations = store.list('locations');
   // keep archived selections visible when editing
   const curType = store.get('jobTypes', draft.jobTypeId);
   if (curType?.archived) types.push(curType);
-  const curLoc = store.get('locations', draft.locationId);
-  if (curLoc?.archived) locations.push(curLoc);
+  const placeOptions = (p) => {
+    const list = store.list(p.coll);
+    const cur = store.get(p.coll, draft[`${p.key}Id`]);
+    if (cur?.archived) list.push(cur);
+    return list;
+  };
+  // Tanks used to be entered as locations: offer to move them into the new Tanks list.
+  const showTankTip = !st.tankTipDone && !store.list('tanks').length && store.list('locations').length > 0;
 
   card.innerHTML = `
     <div class="card-head">
-      <h2 class="card-title">${icon('shield')} ${draft.id ? 'Edit job' : 'Log a job'}</h2>
-      <a class="btn btn-sm btn-ghost" href="#/manage/locations">${icon('pencil')} Lists</a>
+      <h2 class="card-title">${icon('clipboard')} ${draft.id ? 'Edit job' : 'Log a job'}</h2>
+      <a class="btn btn-sm btn-ghost" href="#/manage/tanks">${icon('pencil')} Lists</a>
     </div>
+    ${
+      showTankTip
+        ? `<div class="cleanup">
+            <p><strong>Tanks now have their own list.</strong> If you added tanks as locations, move them across — jobs that used them move too.</p>
+            <div class="btn-row wrap">
+              <button type="button" class="btn btn-sm" id="s-tank-move">${icon('tank')} Move tanks</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="s-tank-tip-hide">Not needed</button>
+            </div>
+          </div>`
+        : ''
+    }
     <form id="s-form" class="stack" novalidate>
       <fieldset class="field">
         <legend>Job type</legend>
@@ -138,16 +164,20 @@ function renderForm(root) {
             : `<button type="button" class="btn btn-sm" id="s-type-new">${icon('plus')} Add a job type</button>`
         }
       </fieldset>
-      <div class="field">
-        <label for="s-loc">Location</label>
-        <div class="row">
-          <select id="s-loc" class="grow">
-            <option value="">${locations.length ? '— No location —' : 'No locations yet — tap +'}</option>
-            ${locations.map((l) => `<option value="${l.id}" ${l.id === draft.locationId ? 'selected' : ''}>${esc(l.name)}</option>`).join('')}
-          </select>
-          <button type="button" class="icon-btn outline" id="s-loc-new" aria-label="Add a location">${icon('plus')}</button>
-        </div>
-      </div>
+      ${PLACES.map((p) => {
+        const list = placeOptions(p);
+        return `
+        <div class="field">
+          <label for="s-${p.key}">${p.label} <span class="muted">(optional)</span></label>
+          <div class="row">
+            <select id="s-${p.key}" class="grow" data-place="${p.key}">
+              <option value="">${list.length ? p.none : p.empty}</option>
+              ${list.map((x) => `<option value="${x.id}" ${x.id === draft[`${p.key}Id`] ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+            </select>
+            <button type="button" class="icon-btn outline" data-place-new="${p.key}" aria-label="Add a ${p.label.toLowerCase()}">${icon('plus')}</button>
+          </div>
+        </div>`;
+      }).join('')}
       <div class="field">
         <label for="s-date">Date</label>
         <div class="row">
@@ -218,7 +248,19 @@ function renderForm(root) {
   }
 
   on(card, 'input[name="s-type"]', 'change', (e) => (draft.jobTypeId = e.target.value));
-  $('#s-loc').addEventListener('change', (e) => (draft.locationId = e.target.value));
+  on(card, '[data-place]', 'change', (e, el) => (draft[`${el.dataset.place}Id`] = e.target.value));
+  on(card, '[data-place-new]', 'click', (_, el) => {
+    const p = PLACES.find((x) => x.key === el.dataset.placeNew);
+    openEditor(p.coll, null, (item) => {
+      if (item) draft[`${p.key}Id`] = item.id;
+      renderForm(root);
+    });
+  });
+  $('#s-tank-move')?.addEventListener('click', () => openMoveSheet('locations', () => renderForm(root)));
+  $('#s-tank-tip-hide')?.addEventListener('click', () => {
+    store.updateSettings({ tankTipDone: true });
+    renderForm(root);
+  });
   $('#s-date').addEventListener('change', (e) => {
     draft.date = e.target.value;
     $('#s-today').disabled = draft.date === todayStr();
@@ -243,21 +285,18 @@ function renderForm(root) {
       renderForm(root);
     }),
   );
-  $('#s-loc-new').addEventListener('click', () =>
-    openEditor('locations', null, (l) => {
-      if (l) draft.locationId = l.id;
-      renderForm(root);
-    }),
-  );
 
   const record = (overrides = {}) => {
     const jt = store.get('jobTypes', draft.jobTypeId);
+    const tank = store.get('tanks', draft.tankId);
     const loc = store.get('locations', draft.locationId);
     return {
       id: draft.id || undefined,
       date: draft.date,
       jobTypeId: jt?.id || null,
       jobTypeName: jt?.name || '',
+      tankId: tank?.id || null,
+      tankName: tank?.name || '',
       locationId: loc?.id || null,
       locationName: loc?.name || '',
       start: draft.start,
@@ -311,6 +350,7 @@ function startEdit(root, e) {
     day: todayStr(),
     date: e.date,
     jobTypeId: e.jobTypeId || '',
+    tankId: e.tankId || '',
     locationId: e.locationId || '',
     start: e.start,
     finish: e.finish || nowTime(),
@@ -332,13 +372,14 @@ function renderWeek(root) {
   const now = Date.now();
   const total = sum(entries, (e) => jobMinutes(e, now));
   const byType = groupMinutes(entries, (e) => e.jobTypeId, jobName, now);
-  const byLoc = groupMinutes(entries, (e) => e.locationId, (e) => locName(e) || 'No location', now);
+  const byTank = groupMinutes(entries.filter((e) => e.tankId), (e) => e.tankId, (e) => placeName(e, PLACES[0]), now);
+  const byLoc = groupMinutes(entries.filter((e) => e.locationId), (e) => e.locationId, (e) => placeName(e, PLACES[1]), now);
 
   const text = () => {
-    const lines = [`Job log — week of ${fmtDateFull(days[0])}`, ''];
+    const lines = [`Jobs — week of ${fmtDateFull(days[0])}`, ''];
     for (const d of days) {
       for (const e of entries.filter((x) => x.date === d).sort((a, b) => a.start.localeCompare(b.start))) {
-        lines.push(`${fmtDate(d)}: ${jobName(e)}${locName(e) ? ` @ ${locName(e)}` : ''} ${t(e.start)}–${e.finish ? t(e.finish) : 'ongoing'} = ${fmtHours(jobMinutes(e, now))} h`);
+        lines.push(`${fmtDate(d)}: ${jobName(e)}${where(e) ? ` @ ${where(e)}` : ''} ${t(e.start)}–${e.finish ? t(e.finish) : 'ongoing'} = ${fmtHours(jobMinutes(e, now))} h`);
       }
     }
     lines.push('', `Total: ${fmtHours(total)} h`, ...byType.map((r) => `  ${r.name}: ${fmtHours(r.minutes)} h`));
@@ -359,10 +400,19 @@ function renderWeek(root) {
         .join('')}
     </div>
     ${
-      byType.length > 2 || byLoc.length
-        ? `<details class="breakdown"><summary>Breakdown by job type & location</summary>
-            <h3 class="sub-title">Job type</h3>${byType.map((r) => `<p class="kv"><span>${esc(r.name)} × ${r.count}</span><strong>${fmtHours(r.minutes)} h</strong></p>`).join('')}
-            <h3 class="sub-title">Location</h3>${byLoc.map((r) => `<p class="kv"><span>${esc(r.name)} × ${r.count}</span><strong>${fmtHours(r.minutes)} h</strong></p>`).join('')}
+      byType.length > 2 || byTank.length || byLoc.length
+        ? `<details class="breakdown"><summary>Breakdown by job type, tank & location</summary>
+            ${[
+              ['Job type', byType],
+              ['Tank', byTank],
+              ['Location', byLoc],
+            ]
+              .filter(([, rows]) => rows.length)
+              .map(
+                ([title, rows]) =>
+                  `<h3 class="sub-title">${title}</h3>${rows.map((r) => `<p class="kv"><span>${esc(r.name)} × ${r.count}</span><strong>${fmtHours(r.minutes)} h</strong></p>`).join('')}`,
+              )
+              .join('')}
           </details>`
         : ''
     }
@@ -381,7 +431,7 @@ function renderWeek(root) {
                       .map(
                         (e) => `
                 <button type="button" class="shift-chip" data-id="${e.id}">
-                  <span><strong>${esc(jobName(e))}</strong>${locName(e) ? ` · ${esc(locName(e))}` : ''}</span>
+                  <span><strong>${esc(jobName(e))}</strong>${where(e) ? ` · ${esc(where(e))}` : ''}</span>
                   <small>${t(e.start)}–${e.finish ? t(e.finish) : '<span class="pill pill-on">ongoing</span>'}</small>
                   ${e.notes ? `<small class="muted">${esc(e.notes)}</small>` : ''}
                 </button>`,
@@ -411,7 +461,7 @@ function renderWeek(root) {
   });
   on(card, '[data-act]', 'click', async (_, el) => {
     if (el.dataset.act === 'copy') toast((await copyText(text())) ? 'Week copied' : 'Copy failed');
-    else if (!(await shareText('Job log', text()))) {
+    else if (!(await shareText('Jobs', text()))) {
       await copyText(text());
       toast('Sharing not available — copied instead');
     }

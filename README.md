@@ -9,8 +9,8 @@ uploaded anywhere.
 | **Assets** | Record **odometer, engine hours and PTO hours** for each asset. Each meter has an **N/A** tick box, which is ticked for you when the asset doesn't have that meter. A **weekly round** checklist shows which assets are done and which are still to do. Copy the week straight into the management spreadsheet, or share/download it as CSV. It warns you if a reading is lower than the last one. |
 | **Hours** | Log each shift. The date defaults to today. Set start and finish with **scroll wheels** (hour, then minute). Night shifts that finish after midnight are handled. You can add an unpaid break and **allowances**: one-off amounts, or an hourly rate × the day's hours. A **weekly breakdown** and the last 8 weeks' totals let you check your payslip. |
 | **Vacuum** | Pick your **ground crew** at the top (e.g. one per vessel) to see only that crew's vacuums and hoses. The app remembers your choice. **Each crew has its own hoses**, so both crews can have a "Forward dry" that is tracked separately. **Copy hoses to another crew** (Manage → Hoses) duplicates one crew's setup for the other. Hose board: **tap a hose to turn it green (on) or red (off)**. Hoses are grouped under the vacuum unit they're tethered to, and **running vacuums move to the top**. **Hand over to night shift** ends your log for everything still running when you go home. Those runs aren't counted as switched off, and night shift's time isn't in your stats. Each group shows how long that vacuum has been **running non-stop**, and each hose shows its own running clock. If you tap by mistake, use Undo. **Stats** has day/week/month views: times turned on/off, run hours per hose and per vacuum, a daily chart, a timeline, and a run log you can correct. |
-| **Sentry** | Timesheet-style log for **sentry, tank cleaning or any job type**, at **locations you set up**. Tap **Start now** to run a live timer, then **Finish now**, or enter start/finish with the wheels. Shows weekly totals by job type and location. |
-| **Manage** | Edit the lists that fill every dropdown: **assets (with their ground crew), hoses, ground crews, allowances, locations, job types**. Also holds settings (first day of the week, 12/24-hour time, minute steps), **backup/restore** and CSV exports. |
+| **Jobs** | Timesheet-style log for **sentry, tank cleaning or any job type**, with an optional **tank** and an optional **location**. Tap **Start now** to run a live timer, then **Finish now**, or enter start/finish with the wheels. Shows weekly totals by job type, tank and location. |
+| **Manage** | Edit the lists that fill every dropdown: **assets (with their ground crew), hoses, ground crews, allowances, job types, tanks, locations**. Also holds settings (first day of the week, 12/24-hour time, minute steps), **backup/restore** and CSV exports. |
 
 ## Putting it on your phone
 
@@ -55,7 +55,7 @@ js/store.js              local storage, backup/restore
 js/util.js               date/time/format helpers
 js/lib/calc.js           hours, allowances, vacuum run-time maths (unit tested)
 js/components/timepicker.js   scroll-wheel time picker
-js/views/*.js            one file per tab
+js/views/*.js            one file per tab (jobs.js is the Jobs tab)
 sw.js                    offline cache
 tests/                   node --test unit tests
 ```

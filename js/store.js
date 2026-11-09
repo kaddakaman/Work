@@ -29,12 +29,13 @@ function seed() {
     shifts: [],
     hoses: [],
     vacSessions: [],
+    tanks: [],
     locations: [],
     jobTypes: [
       { id: uid(), name: 'Sentry', createdAt: Date.now() },
       { id: uid(), name: 'Tank cleaning', createdAt: Date.now() },
     ],
-    sentry: [],
+    sentry: [], // job log entries (the Jobs tab; was "Sentry log")
   };
 }
 

@@ -1,5 +1,5 @@
 // Manage page: the editable lists that fill every dropdown in the app
-// (assets, hoses, ground crews, allowances, locations, job types) plus settings & backup.
+// (assets, hoses, ground crews, allowances, job types, tanks, locations) plus settings & backup.
 
 import * as store from '../store.js';
 import {
@@ -223,30 +223,42 @@ export const ENTITIES = {
       [store.data().shifts.filter((s) => (s.allowances || []).some((a) => a.allowanceId === id)).length, 'shift'],
     ],
   },
+  tanks: {
+    title: 'Tanks',
+    one: 'tank',
+    icon: 'tank',
+    intro: 'Tanks you can pick on a job (optional on each job).',
+    fields: [
+      { key: 'name', label: 'Tank name', type: 'text', required: true, placeholder: 'e.g. 3P' },
+      { key: 'notes', label: 'Notes (optional)', type: 'textarea' },
+    ],
+    sub: (x) => x.notes || '',
+    usage: (id) => [[store.data().sentry.filter((s) => s.tankId === id).length, 'job']],
+  },
   locations: {
     title: 'Locations',
     one: 'location',
     icon: 'pin',
-    intro: 'Tanks, vessels or sites you log sentry and tank cleaning jobs at.',
+    intro: 'Places you can pick on a job, e.g. a vessel, deck or wharf (optional on each job).',
     fields: [
-      { key: 'name', label: 'Location name', type: 'text', required: true, placeholder: 'e.g. Tank 3' },
+      { key: 'name', label: 'Location name', type: 'text', required: true, placeholder: 'e.g. Main deck' },
       { key: 'notes', label: 'Notes (optional)', type: 'textarea' },
     ],
     sub: (l) => l.notes || '',
-    usage: (id) => [[store.data().sentry.filter((s) => s.locationId === id).length, 'log entry']],
+    usage: (id) => [[store.data().sentry.filter((s) => s.locationId === id).length, 'job']],
   },
   jobTypes: {
     title: 'Job types',
     one: 'job type',
     icon: 'tag',
-    intro: 'Roles you can log in the Sentry log, e.g. Sentry, Tank cleaning.',
+    intro: 'Kinds of job you can log on the Jobs tab, e.g. Sentry, Tank cleaning.',
     fields: [{ key: 'name', label: 'Job type', type: 'text', required: true, placeholder: 'e.g. Sentry' }],
     sub: () => '',
-    usage: (id) => [[store.data().sentry.filter((s) => s.jobTypeId === id).length, 'log entry']],
+    usage: (id) => [[store.data().sentry.filter((s) => s.jobTypeId === id).length, 'job']],
   },
 };
 
-const SECTIONS = [...Object.keys(ENTITIES), 'settings'];
+const SECTIONS = ['assets', 'hoses', 'crews', 'allowances', 'jobTypes', 'tanks', 'locations', 'settings'];
 const SECTION_LABEL = { ...Object.fromEntries(Object.entries(ENTITIES).map(([k, v]) => [k, v.title])), settings: 'Settings & backup' };
 
 /** Tether a hose to a vacuum unit (also corrects its current run if it's on). */
@@ -456,6 +468,7 @@ function renderList(body, kind) {
       .join('');
   };
   const canCopy = kind === 'hoses' && store.list('crews').length >= 2 && active.length > 0;
+  const move = MOVES[kind];
 
   body.innerHTML = `
     <section class="card">
@@ -465,6 +478,7 @@ function renderList(body, kind) {
       </div>
       <p class="hint">${esc(def.intro)}</p>
       ${canCopy ? `<button type="button" class="btn btn-sm" id="copy-hoses">${icon('copy')} Copy hoses to another crew</button>` : ''}
+      ${move && active.length ? `<button type="button" class="btn btn-sm" id="move-list">${icon(ENTITIES[move.to].icon)} Move some to ${ENTITIES[move.to].title}…</button>` : ''}
       ${
         active.length
           ? listHTML(active)
@@ -481,6 +495,84 @@ function renderList(body, kind) {
   body.querySelector('[data-add]').addEventListener('click', () => openEditor(kind, null, rerender));
   on(body, '.list-row', 'click', (_, el) => openEditor(kind, store.get(kind, el.dataset.id), rerender));
   body.querySelector('#copy-hoses')?.addEventListener('click', () => openCopyHoses(rerender));
+  body.querySelector('#move-list')?.addEventListener('click', () => openMoveSheet(kind, rerender));
+}
+
+// ---------------------------------------------------------------- move tanks <-> locations
+
+const MOVES = {
+  locations: { to: 'tanks', from: ['locationId', 'locationName'], dest: ['tankId', 'tankName'] },
+  tanks: { to: 'locations', from: ['tankId', 'tankName'], dest: ['locationId', 'locationName'] },
+};
+
+/**
+ * Move list items between Locations and Tanks. Jobs that used them move
+ * with them (their location becomes their tank, or the other way round).
+ */
+export function openMoveSheet(kind, onDone = () => {}) {
+  const move = MOVES[kind];
+  const src = ENTITIES[kind];
+  const dst = ENTITIES[move.to];
+  const items = store.list(kind);
+  const uses = (id) => store.data().sentry.filter((e) => e[move.from[0]] === id).length;
+
+  sheet({
+    title: `Move ${src.title.toLowerCase()} to ${dst.title}`,
+    content: `
+      <div class="stack">
+        <p class="hint">Tick the ones that should be ${dst.title.toLowerCase()}. Jobs that used them move across too.</p>
+        <div class="check-list">${items
+          .map((x) => {
+            const n = uses(x.id);
+            return `<label class="check"><input type="checkbox" value="${x.id}"><span>${esc(x.name)}${n ? ` <small class="muted">(${n} job${n === 1 ? '' : 's'})</small>` : ''}</span></label>`;
+          })
+          .join('')}</div>
+        <div class="btn-row">
+          <button type="button" class="btn" data-close>Cancel</button>
+          <button type="button" class="btn btn-primary" id="mv-go" disabled>Move</button>
+        </div>
+      </div>`,
+    onMount: (b, close) => {
+      const go = b.querySelector('#mv-go');
+      const picked = () => [...b.querySelectorAll('input:checked')].map((i) => i.value);
+      b.addEventListener('change', () => {
+        const n = picked().length;
+        go.disabled = !n;
+        go.textContent = n ? `Move ${n} to ${dst.title}` : 'Move';
+      });
+      go.addEventListener('click', () => {
+        const ids = new Set(picked());
+        let moved = 0;
+        store.mutate((d) => {
+          for (const id of ids) {
+            const item = d[kind].find((x) => x.id === id);
+            if (!item) continue;
+            // Already in the other list under the same name? Use that one.
+            const same = d[move.to].find((x) => x.name.trim().toLowerCase() === item.name.trim().toLowerCase());
+            const targetId = same ? same.id : item.id;
+            if (!same) d[move.to].push({ ...item });
+            let stuck = 0;
+            for (const e of d.sentry) {
+              if (e[move.from[0]] !== id) continue;
+              if (e[move.dest[0]] && e[move.dest[0]] !== targetId) {
+                stuck += 1; // that job already has a different one: leave it as it is
+                continue;
+              }
+              e[move.dest[0]] = targetId;
+              e[move.dest[1]] = item.name;
+              e[move.from[0]] = null;
+              e[move.from[1]] = '';
+            }
+            if (!stuck) d[kind] = d[kind].filter((x) => x.id !== id);
+            moved += 1;
+          }
+        });
+        close();
+        toast(`Moved ${moved} to ${dst.title}`);
+        onDone();
+      });
+    },
+  });
 }
 
 // ---------------------------------------------------------------- copy hoses between crews
@@ -580,7 +672,7 @@ const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 
 function renderSettings(body) {
   const st = store.settings();
   const d = store.data();
-  const counts = `${d.readings.length} readings · ${d.shifts.length} shifts · ${d.vacSessions.length} vacuum runs · ${d.sentry.length} sentry entries`;
+  const counts = `${d.readings.length} readings · ${d.shifts.length} shifts · ${d.vacSessions.length} vacuum runs · ${d.sentry.length} jobs`;
   const lastBackup = st.lastBackupAt ? fmtDateFull(tsDate(st.lastBackupAt)) : 'never';
   const isStandalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
 
@@ -621,7 +713,7 @@ function renderSettings(body) {
       <div class="btn-col">
         <button type="button" class="btn" data-csv="readings">${icon('gauge')} Asset readings</button>
         <button type="button" class="btn" data-csv="shifts">${icon('clock')} Hours worked</button>
-        <button type="button" class="btn" data-csv="sentry">${icon('shield')} Sentry log</button>
+        <button type="button" class="btn" data-csv="sentry">${icon('clipboard')} Jobs</button>
         <button type="button" class="btn" data-csv="vacuum">${icon('wind')} Vacuum runs</button>
       </div>
     </section>
@@ -736,7 +828,7 @@ function renderSettings(body) {
   });
 
   body.querySelector('#s-erase').addEventListener('click', async () => {
-    const ok = await confirmBox('This permanently deletes every asset, reading, shift, hose, vacuum run and sentry entry on this phone.', {
+    const ok = await confirmBox('This permanently deletes every asset, reading, shift, hose, vacuum run and job on this phone.', {
       title: 'Erase all data?',
       ok: 'Erase everything',
       danger: true,
@@ -786,15 +878,16 @@ function exportCSV(kind) {
         ]),
       );
   } else if (kind === 'sentry') {
-    name = 'sentry-log';
-    rows = [['Date', 'Job type', 'Location', 'Start', 'Finish', 'Hours', 'Notes']];
+    name = 'jobs';
+    rows = [['Date', 'Job type', 'Tank', 'Location', 'Start', 'Finish', 'Hours', 'Notes']];
     [...d.sentry]
       .sort((a, b) => a.date.localeCompare(b.date) || a.start.localeCompare(b.start))
       .forEach((e) =>
         rows.push([
           e.date,
           store.nameOf('jobTypes', e.jobTypeId, e.jobTypeName),
-          store.nameOf('locations', e.locationId, e.locationName),
+          e.tankId ? store.nameOf('tanks', e.tankId, e.tankName) : '',
+          e.locationId ? store.nameOf('locations', e.locationId, e.locationName) : '',
           t(e.start),
           e.finish ? t(e.finish) : 'in progress',
           fmtHours(jobMinutes(e)),

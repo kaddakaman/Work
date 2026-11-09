@@ -2,7 +2,7 @@
 // Files are served from the cache straight away and refreshed in the
 // background. Bump VERSION on every release: the app spots the new service
 // worker, downloads the new files and reloads itself.
-const VERSION = 'v7';
+const VERSION = 'v8';
 const CACHE = `work-mate-${VERSION}`;
 const FILES = [
   './',
@@ -19,7 +19,7 @@ const FILES = [
   'js/views/assets.js',
   'js/views/hours.js',
   'js/views/vacuum.js',
-  'js/views/sentry.js',
+  'js/views/jobs.js',
   'js/views/manage.js',
   'icons/icon.svg',
   'icons/icon-192.png',
