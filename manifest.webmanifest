@@ -1,0 +1,22 @@
+{
+  "name": "Work Mate",
+  "short_name": "Work Mate",
+  "description": "Asset readings, hours worked, vacuum hoses and sentry log — offline on your phone.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f5f7",
+  "theme_color": "#0f766e",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon.svg", "sizes": "any", "type": "image/svg+xml" }
+  ],
+  "shortcuts": [
+    { "name": "Hours worked", "url": "./#/hours" },
+    { "name": "Vacuum hoses", "url": "./#/vacuum" },
+    { "name": "Sentry log", "url": "./#/sentry" }
+  ]
+}
