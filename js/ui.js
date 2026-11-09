@@ -8,6 +8,10 @@ let closeCurrentToast = null;
 export function toast(message, { actionLabel, onAction, timeout = 4000, kind = '' } = {}) {
   closeCurrentToast?.();
   const host = document.getElementById('toasts');
+  // While a sheet is open the rest of the page can't be tapped, so show the
+  // toast inside the sheet; that keeps its Undo button usable.
+  const parent = [...document.querySelectorAll('dialog[open]')].pop() || document.body;
+  if (host.parentElement !== parent) parent.append(host);
   const el = document.createElement('div');
   el.className = `toast ${kind ? `toast-${kind}` : ''}`;
   el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
@@ -52,6 +56,8 @@ export function sheet({ title, content, onMount, onClose }) {
     if (dlg.open) dlg.close();
   };
   dlg.addEventListener('close', () => {
+    const host = document.getElementById('toasts');
+    if (dlg.contains(host)) document.body.append(host);
     dlg.remove();
     onClose?.();
   });

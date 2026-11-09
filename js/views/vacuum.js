@@ -35,6 +35,44 @@ const use12 = () => store.settings().timeFormat === '12';
 const t = (hhmm) => fmtTime(hhmm, use12());
 const tts = (ts) => t(tsTime(ts));
 
+/** Runs shorter than this were probably a mis-press. */
+const SHORT_RUN_MS = 60 * 1000;
+const runLen = (s, now = Date.now()) => (s.end ?? now) - s.start;
+const isShort = (s) => s.end != null && runLen(s) < SHORT_RUN_MS;
+/** "8s" for very short runs, otherwise "3h 05m". */
+const fmtRunLen = (ms) => (ms < 60000 ? `${Math.max(0, Math.round(ms / 1000))}s` : fmtDur(ms));
+
+/** Remove runs from the log (so they no longer count in the stats), with Undo. */
+function deleteRuns(ids, after) {
+  const removed = store.data().vacSessions.filter((s) => ids.includes(s.id));
+  if (!removed.length) return;
+  store.mutate((d) => {
+    d.vacSessions = d.vacSessions.filter((s) => !ids.includes(s.id));
+  });
+  const first = removed[0];
+  toast(
+    removed.length === 1
+      ? `Deleted ${store.nameOf('hoses', first.hoseId, first.hoseName)} run (${fmtRunLen(runLen(first))})`
+      : `Deleted ${removed.length} runs`,
+    {
+      actionLabel: 'Undo',
+      timeout: 6000,
+      onAction: () => {
+        store.mutate((d) => {
+          for (const r of removed) {
+            if (d.vacSessions.some((x) => x.id === r.id)) continue;
+            // A hose can only have one run going at a time.
+            if (r.end == null && openSessionFor(d.vacSessions, r.hoseId)) continue;
+            d.vacSessions.push(r);
+          }
+        });
+        after();
+      },
+    },
+  );
+  after();
+}
+
 export function render(root, [sub = '']) {
   const tab = sub === 'stats' ? 'stats' : 'hoses';
   root.innerHTML = `
@@ -171,18 +209,28 @@ function toggleHose(hoseId, rerender) {
     store.mutate((d) => {
       d.vacSessions.find((s) => s.id === open.id).end = end;
     });
-    toast(`${hose.name} OFF — ran ${fmtDur(end - open.start)}`, {
-      actionLabel: 'Undo',
-      timeout: 6000,
-      onAction: () => {
-        if (openSessionFor(store.data().vacSessions, hoseId)) return;
-        store.mutate((d) => {
-          const s = d.vacSessions.find((x) => x.id === open.id);
-          if (s) s.end = null;
-        });
-        rerender();
-      },
-    });
+    const ran = end - open.start;
+    if (ran < SHORT_RUN_MS) {
+      // On-then-straight-off is usually a mis-press: offer to wipe it from the stats.
+      toast(`${hose.name} OFF — only on ${fmtRunLen(ran)}. Turned on by mistake?`, {
+        actionLabel: 'Delete run',
+        timeout: 8000,
+        onAction: () => deleteRuns([open.id], rerender),
+      });
+    } else {
+      toast(`${hose.name} OFF — ran ${fmtDur(ran)}`, {
+        actionLabel: 'Undo',
+        timeout: 6000,
+        onAction: () => {
+          if (openSessionFor(store.data().vacSessions, hoseId)) return;
+          store.mutate((d) => {
+            const s = d.vacSessions.find((x) => x.id === open.id);
+            if (s) s.end = null;
+          });
+          rerender();
+        },
+      });
+    }
   } else {
     const s = {
       id: uid(),
@@ -221,13 +269,31 @@ function dateTimeField(container, { ts, label }) {
 function openHoseSheet(hoseId, rerender) {
   const hose = store.get('hoses', hoseId);
   if (!hose) return;
-  const sessions = store.data().vacSessions;
-  const open = openSessionFor(sessions, hoseId);
-  const recent = sessions
-    .filter((s) => s.hoseId === hoseId)
-    .sort((a, b) => b.start - a.start)
-    .slice(0, 6);
+  const open = openSessionFor(store.data().vacSessions, hoseId);
   const now = Date.now();
+
+  const runsHTML = () => {
+    const at = Date.now();
+    const recent = store
+      .data()
+      .vacSessions.filter((s) => s.hoseId === hoseId)
+      .sort((a, b) => b.start - a.start)
+      .slice(0, 8);
+    if (!recent.length) return '<p class="hint">No runs recorded yet.</p>';
+    return `<ul class="list compact">${recent
+      .map(
+        (s) => `
+        <li class="row-with-action">
+          <span class="list-static">
+            <span>${esc(fmtDate(tsDate(s.start)))} · ${tts(s.start)} → ${s.end ? tts(s.end) : 'now'}${isShort(s) ? ' <span class="badge">short</span>' : ''}</span>
+            <strong>${fmtRunLen(runLen(s, at))}</strong>
+          </span>
+          <button type="button" class="icon-btn" data-del-run="${s.id}" aria-label="Delete this run">${icon('trash')}</button>
+        </li>`,
+      )
+      .join('')}</ul>
+      <p class="hint">Turned it on by mistake? Tap ${icon('trash')} to delete that run so it doesn’t count in the stats.</p>`;
+  };
 
   sheet({
     title: hose.name,
@@ -247,15 +313,7 @@ function openHoseSheet(hoseId, rerender) {
         </details>
         <div>
           <h3 class="sub-title">Recent runs</h3>
-          ${
-            recent.length
-              ? `<ul class="list compact">${recent
-                  .map(
-                    (s) => `<li class="list-static"><span>${esc(fmtDate(tsDate(s.start)))} · ${tts(s.start)} → ${s.end ? tts(s.end) : 'now'}</span><strong>${fmtDur((s.end ?? now) - s.start)}</strong></li>`,
-                  )
-                  .join('')}</ul>`
-              : '<p class="hint">No runs recorded yet.</p>'
-          }
+          <div id="hs-runs">${runsHTML()}</div>
         </div>
         <div class="btn-row">
           <a class="btn" href="#/vacuum/stats" data-close>${icon('chart')} Stats</a>
@@ -265,6 +323,22 @@ function openHoseSheet(hoseId, rerender) {
     onMount: (b, close) => {
       const when = dateTimeField(b.querySelector('#hs-when'), { ts: open ? open.start : now, label: 'Turned on at' });
       const err = b.querySelector('.form-error');
+      const runsBox = b.querySelector('#hs-runs');
+      runsBox.addEventListener('click', (e) => {
+        const btn = e.target.closest('[data-del-run]');
+        if (!btn) return;
+        const id = btn.dataset.delRun;
+        if (id === open?.id) {
+          // Deleting the run that's going now switches the hose back off.
+          close();
+          deleteRuns([id], rerender);
+        } else {
+          deleteRuns([id], () => {
+            runsBox.innerHTML = runsHTML();
+            rerender();
+          });
+        }
+      });
       b.querySelector('#hs-asset').addEventListener('change', (e) => {
         setHoseTether(hoseId, e.target.value);
         toast('Tether updated');
@@ -274,8 +348,9 @@ function openHoseSheet(hoseId, rerender) {
         const ts = when.value;
         if (!ts) return formError(err, 'Pick a date.');
         if (ts > Date.now()) return formError(err, 'That time is in the future.');
-        const prevEnd = sessions
-          .filter((s) => s.hoseId === hoseId && s.end && s.id !== open?.id)
+        const prevEnd = store
+          .data()
+          .vacSessions.filter((s) => s.hoseId === hoseId && s.end && s.id !== open?.id)
           .reduce((m, s) => Math.max(m, s.end), 0);
         if (ts < prevEnd) return formError(err, `That overlaps the previous run (ended ${fmtDate(tsDate(prevEnd))} ${tts(prevEnd)}).`);
         if (open) {
@@ -361,6 +436,7 @@ function renderStats(body) {
   const inRange = sessions
     .filter((s) => s.start < re && (s.end ?? now) >= rs)
     .sort((a, b) => b.start - a.start);
+  const shortRuns = inRange.filter(isShort);
 
   body.innerHTML = `
     <section class="card">
@@ -413,21 +489,29 @@ function renderStats(body) {
     <section class="card">
       <h2 class="card-title">${icon('list')} Run log</h2>
       ${
+        shortRuns.length
+          ? `<div class="cleanup">
+              <p><strong>${shortRuns.length} run${shortRuns.length === 1 ? '' : 's'} under a minute</strong> in this period — probably hoses turned on by mistake.</p>
+              <button type="button" class="btn btn-sm" id="vs-clean">${icon('trash')} Delete ${shortRuns.length === 1 ? 'it' : 'them'}</button>
+            </div>`
+          : ''
+      }
+      ${
         inRange.length
           ? `<ul class="list">${inRange
               .slice(0, 200)
               .map(
                 (s) => `
-            <li><button type="button" class="list-row" data-session="${s.id}">
+            <li class="row-with-action"><button type="button" class="list-row" data-session="${s.id}">
               <span class="list-main">
                 <strong>${esc(store.nameOf('hoses', s.hoseId, s.hoseName))}${s.assetId ? ` <small class="muted">↳ ${esc(store.nameOf('assets', s.assetId, s.assetName))}</small>` : ''}</strong>
                 <small>${esc(fmtDate(tsDate(s.start)))} ${tts(s.start)} → ${s.end ? `${tsDate(s.end) !== tsDate(s.start) ? `${esc(fmtDate(tsDate(s.end)))} ` : ''}${tts(s.end)}` : '<span class="pill pill-on">running</span>'}</small>
               </span>
-              <span class="list-end">${s.end ? fmtDur(s.end - s.start) : `<span data-since="${s.start}">${fmtClock(now - s.start)}</span>`}</span>
-            </button></li>`,
+              <span class="list-end">${s.end ? `${isShort(s) ? '<span class="badge">short</span> ' : ''}${fmtRunLen(s.end - s.start)}` : `<span data-since="${s.start}">${fmtClock(now - s.start)}</span>`}</span>
+            </button><button type="button" class="icon-btn" data-del-run="${s.id}" aria-label="Delete this run">${icon('trash')}</button></li>`,
               )
               .join('')}</ul>
-            <p class="hint">Tap a run to correct its times or delete it.</p>`
+            <p class="hint">Tap ${icon('trash')} to delete a run you didn’t mean to start — it comes off the stats. Tap a run to fix its times.</p>`
           : '<p class="hint">Nothing recorded in this period.</p>'
       }
     </section>`;
@@ -450,6 +534,16 @@ function renderStats(body) {
     rerender();
   });
   on(body, '[data-session]', 'click', (_, el) => openSessionSheet(el.dataset.session, rerender));
+  on(body, '[data-del-run]', 'click', (_, el) => deleteRuns([el.dataset.delRun], rerender));
+  body.querySelector('#vs-clean')?.addEventListener('click', async () => {
+    const n = shortRuns.length;
+    const ok = await confirmBox(`Delete ${n} run${n === 1 ? '' : 's'} shorter than a minute? ${n === 1 ? 'It' : 'They'} will no longer count in the stats.`, {
+      title: 'Clean up short runs?',
+      ok: 'Delete',
+      danger: true,
+    });
+    if (ok) deleteRuns(shortRuns.map((r) => r.id), rerender);
+  });
 
   const chart = body.querySelector('#vs-chart');
   if (stats.gran === 'day') renderTimeline(chart, inRange, rs, re, now);
@@ -611,12 +705,9 @@ function openSessionSheet(id, rerender) {
         close();
         rerender();
       });
-      b.querySelector('#ss-del').addEventListener('click', async () => {
-        if (!(await confirmBox('Delete this run from the log?', { ok: 'Delete', danger: true }))) return;
-        store.remove('vacSessions', s.id);
-        toast('Run deleted');
+      b.querySelector('#ss-del').addEventListener('click', () => {
         close();
-        rerender();
+        deleteRuns([s.id], rerender);
       });
     },
   });

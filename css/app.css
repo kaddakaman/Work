@@ -724,6 +724,38 @@ input::placeholder {
   font-size: 0.84rem;
 }
 
+/* a tappable row with its own delete button on the right */
+.row-with-action {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.row-with-action > .list-row,
+.row-with-action > .list-static {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.row-with-action > .icon-btn {
+  color: var(--danger);
+}
+
+.cleanup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-soft);
+  border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent);
+}
+
+.cleanup p {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
 .list-end {
   font-weight: 650;
   font-variant-numeric: tabular-nums;
@@ -1936,6 +1968,10 @@ dialog.sheet::backdrop {
   pointer-events: none;
 }
 
+dialog .toasts {
+  bottom: calc(env(safe-area-inset-bottom) + 16px);
+}
+
 .toast {
   display: flex;
   align-items: center;
@@ -1979,6 +2015,7 @@ dialog.sheet::backdrop {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 8px 10px;
+  white-space: nowrap;
   cursor: pointer;
 }
 
