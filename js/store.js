@@ -17,7 +17,12 @@ function seed() {
       timeFormat: '24', // '24' | '12'
       minuteStep: 1, // time wheel minute increments
       lastBackupAt: null,
+      crewId: '', // ground crew shown on the Vacuum page ('' = all crews)
     },
+    crews: [
+      { id: uid(), name: 'Ground Crew 1', createdAt: Date.now() },
+      { id: uid(), name: 'Ground Crew 2', createdAt: Date.now() },
+    ],
     assets: [],
     readings: [],
     allowances: [],
@@ -79,13 +84,9 @@ function write() {
     storageOk = false;
   }
 }
-if (storageOk) {
-  try {
-    if (!localStorage.getItem(KEY)) write();
-  } catch {
-    /* ignore */
-  }
-}
+// Save straight away so anything added by normalise() (e.g. a new list in an
+// update) keeps the same ids next time the app opens.
+if (storageOk) write();
 
 function changed() {
   write();

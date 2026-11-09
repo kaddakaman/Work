@@ -28,7 +28,7 @@ import { openSessionFor, vacuumRunStart, vacuumStats, dailyRunTime } from '../li
 import { createTimePicker } from '../components/timepicker.js';
 import { icon } from '../icons.js';
 import { toast, sheet, confirmBox, periodNav, emptyState, on, formError } from '../ui.js';
-import { openEditor, assetOptions, setHoseTether } from './manage.js';
+import { openEditor, assetOptions, setHoseTether, crewOf } from './manage.js';
 
 const stats = { gran: 'day', anchor: null, filter: '' };
 const use12 = () => store.settings().timeFormat === '12';
@@ -73,15 +73,52 @@ function deleteRuns(ids, after) {
   after();
 }
 
+// ---------------------------------------------------------------- ground crews
+
+/** The crew picked at the top of the page ('' = all crews). */
+function currentCrew() {
+  const crew = store.get('crews', store.settings().crewId);
+  return crew && !crew.archived ? crew.id : '';
+}
+
+/** Is this vacuum unit part of the crew being viewed? Units with no crew show for every crew. */
+function inCrew(assetId, crew = currentCrew()) {
+  if (!crew) return true;
+  const assigned = crewOf(store.get('assets', assetId));
+  return !assigned || assigned.id === crew;
+}
+
+function crewSwitchHTML() {
+  const crews = store.list('crews');
+  if (!crews.length) return '';
+  const crew = currentCrew();
+  const opts = [...crews.map((c) => ({ id: c.id, name: c.name })), { id: '', name: 'All' }];
+  return `
+    <div class="crew-switch" role="radiogroup" aria-label="Ground crew">
+      ${icon('users')}
+      ${opts
+        .map(
+          (o) => `<label class="chip-radio"><input type="radio" name="crew" value="${o.id}" ${o.id === crew ? 'checked' : ''}><span>${esc(o.name)}</span></label>`,
+        )
+        .join('')}
+    </div>`;
+}
+
 export function render(root, [sub = '']) {
   const tab = sub === 'stats' ? 'stats' : 'hoses';
   root.innerHTML = `
+    ${crewSwitchHTML()}
     <nav class="seg seg-tabs" aria-label="Vacuum views">
       <a href="#/vacuum" class="${tab === 'hoses' ? 'active' : ''}">${icon('wind')} Hoses</a>
       <a href="#/vacuum/stats" class="${tab === 'stats' ? 'active' : ''}">${icon('chart')} Stats</a>
     </nav>
     <div id="vac-body"></div>`;
   const body = root.querySelector('#vac-body');
+  on(root, 'input[name="crew"]', 'change', (e) => {
+    store.updateSettings({ crewId: e.target.value });
+    stats.filter = '';
+    render(root, [sub]);
+  });
   if (tab === 'stats') renderStats(body);
   else renderHoses(body);
 }
@@ -94,9 +131,22 @@ function optionsHTML(opts, selected) {
 }
 
 function renderHoses(body) {
-  const hoses = store.list('hoses');
+  const allHoses = store.list('hoses');
+  const crew = currentCrew();
+  const hoses = allHoses.filter((h) => inCrew(h.assetId, crew));
   const sessions = store.data().vacSessions;
   const now = Date.now();
+
+  if (!hoses.length && allHoses.length) {
+    const crewName = store.get('crews', crew)?.name;
+    body.innerHTML = `<section class="card">${emptyState({
+      iconName: 'users',
+      title: `No vacuums for ${crewName}`,
+      text: `Edit a vacuum unit in Manage → Assets and set its ground crew to ${crewName}. Hoses tethered to it will then show here.`,
+      action: `<a class="btn btn-primary" href="#/manage/assets">${icon('pencil')} Assign assets</a>`,
+    })}</section>`;
+    return;
+  }
 
   if (!hoses.length) {
     body.innerHTML = `<section class="card">${emptyState({
@@ -116,11 +166,14 @@ function renderHoses(body) {
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(h);
   }
-  const order = [...groups.keys()].sort((a, b) => {
-    if (!a) return 1;
-    if (!b) return -1;
-    return store.nameOf('assets', a).localeCompare(store.nameOf('assets', b), undefined, { numeric: true });
-  });
+  // Vacuums with a hose on go to the top; untethered hoses go last in each half.
+  const running = (key) => groups.get(key).some((h) => openSessionFor(sessions, h.id));
+  const order = [...groups.keys()].sort(
+    (a, b) =>
+      running(b) - running(a) ||
+      (a ? 0 : 1) - (b ? 0 : 1) ||
+      store.nameOf('assets', a).localeCompare(store.nameOf('assets', b), undefined, { numeric: true }),
+  );
 
   const onCount = hoses.filter((h) => openSessionFor(sessions, h.id)).length;
   const runningVacs = order.filter((id) => id && vacuumRunStart(sessions, id, now)).length;
@@ -187,13 +240,24 @@ function renderHoses(body) {
     <p class="hint center">Tap a hose to switch it on/off. Use ⋯ to tether it to a vacuum or fix a start time.</p>`;
 
   const rerender = () => renderHoses(body);
-  on(body, '[data-toggle]', 'click', (_, el) => toggleHose(el.dataset.toggle, rerender));
+  on(body, '[data-toggle]', 'click', (_, el) => {
+    const id = el.dataset.toggle;
+    const turningOn = !openSessionFor(store.data().vacSessions, id);
+    toggleHose(id, rerender);
+    if (!turningOn) return;
+    // Its vacuum has just moved to the top of the list: follow it there.
+    const group = body.querySelector(`[data-toggle="${id}"]`)?.closest('.vac-group');
+    const top = group?.getBoundingClientRect().top;
+    if (group && (top < 70 || top > window.innerHeight * 0.5)) group.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
   on(body, '[data-more]', 'click', (_, el) => openHoseSheet(el.dataset.more, rerender));
   body.querySelector('#v-add').addEventListener('click', () => openEditor('hoses', null, rerender));
   body.querySelector('#v-alloff').addEventListener('click', async () => {
-    if (!(await confirmBox(`Turn off all ${onCount} running hose${onCount === 1 ? '' : 's'}?`, { ok: 'Turn all off', danger: true }))) return;
+    const crewName = crew ? ` for ${store.get('crews', crew).name}` : '';
+    if (!(await confirmBox(`Turn off all ${onCount} running hose${onCount === 1 ? '' : 's'}${crewName}?`, { ok: 'Turn all off', danger: true }))) return;
     const end = Date.now();
-    store.mutate((d) => d.vacSessions.forEach((s) => s.end == null && (s.end = end)));
+    const shown = new Set(hoses.map((h) => h.id)); // only this crew's hoses
+    store.mutate((d) => d.vacSessions.forEach((s) => s.end == null && shown.has(s.hoseId) && (s.end = end)));
     toast('All hoses off');
     rerender();
   });
@@ -413,7 +477,8 @@ function renderStats(body) {
   const { from, to, label } = rangeFor(stats.gran, stats.anchor);
   const rs = toTs(from);
   const re = toTs(to);
-  const all = store.data().vacSessions;
+  const crew = currentCrew();
+  const all = store.data().vacSessions.filter((s) => inCrew(s.assetId, crew));
   const [fKind, fId] = stats.filter.split(':');
   const sessions = fKind === 'hose' ? all.filter((s) => s.hoseId === fId) : fKind === 'asset' ? all.filter((s) => s.assetId === fId) : all;
   const st = vacuumStats(sessions, rs, re, now);
@@ -421,14 +486,14 @@ function renderStats(body) {
   const vacRuns = st.vacuums.reduce((n, v) => n + v.runs, 0);
 
   // Filter choices: every hose / vacuum seen in the data or the lists.
-  const hoseIds = new Map(store.list('hoses').map((h) => [h.id, h.name]));
-  const assetIds = new Map(store.list('assets').filter((a) => a.isVacuum).map((a) => [a.id, a.name]));
+  const hoseIds = new Map(store.list('hoses').filter((h) => inCrew(h.assetId, crew)).map((h) => [h.id, h.name]));
+  const assetIds = new Map(store.list('assets').filter((a) => a.isVacuum && inCrew(a.id, crew)).map((a) => [a.id, a.name]));
   for (const s of all) {
     if (!hoseIds.has(s.hoseId)) hoseIds.set(s.hoseId, store.nameOf('hoses', s.hoseId, s.hoseName));
     if (s.assetId && !assetIds.has(s.assetId)) assetIds.set(s.assetId, store.nameOf('assets', s.assetId, s.assetName));
   }
   const filterOpts = [
-    { value: '', label: 'All hoses & vacuums' },
+    { value: '', label: crew ? `All of ${store.get('crews', crew).name}` : 'All hoses & vacuums' },
     ...(assetIds.size ? [{ group: 'Vacuum unit', options: [...assetIds].map(([id, n]) => ({ value: `asset:${id}`, label: n })) }] : []),
     ...(hoseIds.size ? [{ group: 'Hose', options: [...hoseIds].map(([id, n]) => ({ value: `hose:${id}`, label: n })) }] : []),
   ];

@@ -34,6 +34,17 @@ export const assetOptions = () => {
   ];
 };
 
+export const crewOptions = () => [
+  { value: '', label: 'Not set (shows for every crew)' },
+  ...store.list('crews').map((c) => ({ value: c.id, label: c.name })),
+];
+
+/** The crew an asset belongs to, ignoring deleted / archived crews. */
+export function crewOf(asset) {
+  const crew = asset?.crewId ? store.get('crews', asset.crewId) : null;
+  return crew && !crew.archived ? crew : null;
+}
+
 export const ENTITIES = {
   assets: {
     title: 'Assets',
@@ -54,6 +65,13 @@ export const ENTITIES = {
         ],
       },
       { key: 'isVacuum', label: 'This is a vacuum unit (hoses can run from it)', type: 'checkbox', def: false },
+      {
+        key: 'crewId',
+        label: 'Ground crew',
+        type: 'select',
+        options: crewOptions,
+        note: 'The Vacuum page only shows the vacuums for the crew you choose there.',
+      },
       { key: 'notes', label: 'Notes (optional)', type: 'textarea' },
     ],
     sub: (a) =>
@@ -61,6 +79,7 @@ export const ENTITIES = {
         a.ref,
         [a.hasOdometer && 'Odo', a.hasEngine && 'Engine', a.hasPto && 'PTO'].filter(Boolean).join(' · ') || 'No meters',
         a.isVacuum && 'Vacuum unit',
+        crewOf(a)?.name,
       ]
         .filter(Boolean)
         .join('  •  '),
@@ -104,6 +123,21 @@ export const ENTITIES = {
       }
     },
     beforeRemove: (item) => stopHose(item.id),
+  },
+  crews: {
+    title: 'Ground crews',
+    one: 'crew',
+    icon: 'users',
+    intro: 'One crew per vessel. Assign assets to a crew (in Assets) and the Vacuum page will only show your crew’s vacuums.',
+    fields: [{ key: 'name', label: 'Crew name', type: 'text', required: true, placeholder: 'e.g. Ground Crew 1' }],
+    sub: (c) => {
+      const n = store.data().assets.filter((a) => a.crewId === c.id && !a.archived).length;
+      return `${n} asset${n === 1 ? '' : 's'}`;
+    },
+    usage: (id) => [[store.data().assets.filter((a) => a.crewId === id).length, 'asset']],
+    beforeRemove: (item) => {
+      if (store.settings().crewId === item.id) store.updateSettings({ crewId: '' });
+    },
   },
   allowances: {
     title: 'Allowances',
